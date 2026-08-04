@@ -1,11 +1,21 @@
-## 0.1.12
+# Changelog
+
+## 0.1.13 – 2026-08-04
+
+- Einstellbares 30-s-Kalibrierfenster nach jeder vollständig von Symcon ausgeführten ZU-Fahrt auf 100 % ergänzt. Während dieser Zeit sendet Symcon weder STOP noch einen Gegenbefehl; ShakeFree startet frühestens danach.
+- Neue Phase `Kalibrierfenster` mit timerbasierter Überwachung; keine lange blockierende PHP-Wartezeit.
+- Neue Eigenschaft `Symcon-Steuerung aktiv`: Im ausgeschalteten Zustand sind Ereignisse und Timer deaktiviert und die lokale LCN-Bedienung bleibt frei.
+- Fehlerverriegelung ergänzt: Laufzeit- und Aufbaufehler versetzen die Instanz bis zur bewussten Quittierung in einen inaktiven Zustand.
+- Im verriegelten Fehlerzustand werden keine automatischen LCN-Befehle mehr gesendet; ShakeFree wird abgeschaltet und die Positionsreferenz verworfen.
+- Fehlerquittierung nur bei real bestätigten Relais AUS; die Quittierung selbst sendet keinen LCN-Befehl.
+- Visualisierung um Kalibrier-Restzeit, deaktivierte Bedienelemente während des Kalibrierfensters und klaren Fehler-/Inaktiv-Hinweis erweitert.
+
+## 0.1.12 – 2026-08-04
 
 - Notfall-Hotfix: Fehlerphase blockiert lokale LCN-Bedienung nicht mehr.
 - ShakeFree-Umschaltpause (Standard 500 ms).
 - Fehlerquittierung ohne LCN-Befehl.
 - Starttimeout kehrt nach Spätstart-Schutz in den Stillstand zurück.
-
-# Changelog
 
 ## 0.1.11 – 2026-08-04
 

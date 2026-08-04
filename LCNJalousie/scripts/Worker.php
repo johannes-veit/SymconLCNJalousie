@@ -1,7 +1,7 @@
 <?php
 /**
  * Jalousiesteuerung LCN / IP-Symcon 9.0
- * V11.4 - 1-s-Worker mit kurzer Millisekunden-Schlussphase
+ * V11.5 - 1-s-Worker mit kurzer Millisekunden-Schlussphase
  *
  * Der ScriptTimer wird vom Controller auf 1 Sekunde gesetzt. Lange Fahrten
  * werden nicht mit IPS_Sleep abgewartet. Nur im letzten Workerfenster wird
@@ -20,6 +20,7 @@ const JW_PHASE_EXTERNAL   = 6;
 const JW_PHASE_ERROR      = 7;
 const JW_PHASE_REFERENCE  = 8;
 const JW_PHASE_SYNC       = 9;
+const JW_PHASE_CALIBRATION = 10;
 
 $rootID = JW_RootID((int) ($_IPS['SELF'] ?? 0));
 $lockName = 'Jalousie_PHP_' . $rootID;
@@ -74,7 +75,7 @@ try {
         if ($guardUntil > 0.0 && $now >= $guardUntil) {
             $action = 'CANCEL_GUARD';
         }
-    } elseif (in_array($phase, [JW_PHASE_BLIND, JW_PHASE_SLAT, JW_PHASE_SHAKE, JW_PHASE_REFERENCE], true)) {
+    } elseif (in_array($phase, [JW_PHASE_BLIND, JW_PHASE_SLAT, JW_PHASE_SHAKE, JW_PHASE_REFERENCE, JW_PHASE_CALIBRATION], true)) {
         $deadline = GetValueFloat(JW_ID($rootID, '05_Intern', 'Zielzeit_ms'));
         if ($deadline > 0.0) {
             $remaining = $deadline - $now;

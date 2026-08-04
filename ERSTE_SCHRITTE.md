@@ -107,3 +107,11 @@ Nach dem Update auf 0.1.11 die Jalousieinstanz einmal mit **Übernehmen** neu an
 
 Solange `Position gültig` ausgeschaltet ist, sind 0 %/0 % nur Initialwerte und keine bestätigte reale Stellung. Führen Sie als ersten Abgleich im Modul eine **Referenzfahrt AUF** oder **Referenzfahrt AB** aus. Nach dem kontrollierten Fahrtende setzt das Modul 0 %/0 % beziehungsweise 100 %/100 % und schaltet `Position gültig` ein. Ist die Position noch unbekannt, behandelt das Modul den ersten Symcon-Endlagenauftrag auf 0 % oder 100 % automatisch als volle Referenzfahrt mit der maximal überwachten Fahrzeit. Die explizite Referenzfahrt ist für den Erstabgleich trotzdem am klarsten und bewusst auswählbar.
 
+
+
+## Sicherheit ab Version 0.1.13
+
+- Lassen Sie **Symcon-Steuerung aktiv** während der Konfiguration ausgeschaltet, wenn die lokale LCN-Funktion zuerst allein geprüft werden soll.
+- Das Kalibrierfenster nach 100 % ZU ist standardmäßig auf 30.000 ms eingestellt.
+- ShakeFree erst nach einer vollständigen ZU-Fahrt ohne ShakeFree und einer erfolgreichen Prüfung des Kalibrierfensters aktivieren.
+- Bei **Fehler verriegelt** greift Symcon nicht mehr ein. Bringen Sie die Jalousie lokal zum Stillstand, prüfen Sie beide Relais auf AUS und quittieren Sie erst danach.

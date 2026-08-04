@@ -380,6 +380,85 @@ def check_timing_examples() -> None:
         ERRORS.append('timing model bottom-to-top full travel must be 182000 ms before reserve')
 
 
+
+def check_calibration_window_and_fault_latch() -> None:
+    module_path = ROOT / 'LCNJalousie' / 'module.php'
+    controller_path = ROOT / 'LCNJalousie' / 'scripts' / 'Controller.php'
+    worker_path = ROOT / 'LCNJalousie' / 'scripts' / 'Worker.php'
+    html_path = ROOT / 'LCNJalousie' / 'module.html'
+    diagnose_path = ROOT / 'LCNJalousie' / 'scripts' / 'Diagnose.php'
+    if not all(path.is_file() for path in [module_path, controller_path, worker_path, html_path, diagnose_path]):
+        return
+
+    module = module_path.read_text(encoding='utf-8')
+    controller = controller_path.read_text(encoding='utf-8')
+    worker = worker_path.read_text(encoding='utf-8')
+    html = html_path.read_text(encoding='utf-8')
+    diagnose = diagnose_path.read_text(encoding='utf-8')
+
+    required_module = [
+        "RegisterPropertyBoolean('ModuleEnabled', true)",
+        "RegisterPropertyInteger('CalibrationWindowMs', 30000)",
+        "RegisterAttributeBoolean('FaultLatched', false)",
+        "RegisterAttributeBoolean('RuntimeEnabled', false)",
+        "public function LatchFault(string $message): void",
+        "public function IsRuntimePermitted(): bool",
+        "private const STATUS_FAULT_LATCHED = 212",
+        "$this->SetStatus(104)",
+        "$this->setRuntimeEnabled(false",
+        "['Kalibrierfenster_ms', 'Kalibrierfenster vor ShakeFree [ms]'",
+        "'Kalibrierfenster_ms' => ['CalibrationWindowMs', 1]",
+        "['Modul_Aktiv', 'Symcon-Steuerung aktiv'",
+        "'Modul_Aktiv' => ['ModuleEnabled', 0]",
+        "Fehler_Verriegelt', 'Fehler verriegelt'",
+        "Fehler quittiert. Symcon wurde ohne LCN-Fahrbefehl reaktiviert",
+    ]
+    for pattern in required_module:
+        if pattern not in module:
+            ERRORS.append(f'{module_path.relative_to(ROOT)}: safety extension missing ({pattern})')
+
+    required_controller = [
+        'const J_PHASE_CALIBRATION = 10;',
+        "IPS_FunctionExists('LCNJAL_IsRuntimePermitted')",
+        "LCNJAL_IsRuntimePermitted($rootID)",
+        "J_ConfigInt($rootID, 'Kalibrierfenster_ms')",
+        "SetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase'), J_PHASE_CALIBRATION)",
+        "100 % ZU erreicht; Kalibrierfenster gestartet",
+        "if ($phase === J_PHASE_CALIBRATION)",
+        "LCNJAL_LatchFault($rootID, $message)",
+        "Symcon-Instanz sofort",
+        "Starttimeout; verspaeteten Relaisstart abfangen', true",
+    ]
+    for pattern in required_controller:
+        if pattern not in controller:
+            ERRORS.append(f'{controller_path.relative_to(ROOT)}: calibration/fault logic missing ({pattern})')
+
+    forbidden_controller = [
+        "J_PHASE_BLIND && $oldDirection === J_DIR_DOWN",
+        "J_SetWorker($rootID, true); // Weiter Positionsanzeige, bis das reale Relais AUS meldet.",
+    ]
+    for pattern in forbidden_controller:
+        if pattern in controller:
+            ERRORS.append(f'{controller_path.relative_to(ROOT)}: unsafe old behavior remains ({pattern})')
+
+    if 'JW_PHASE_CALIBRATION = 10' not in worker or 'JW_PHASE_CALIBRATION' not in worker.split('in_array($phase', 1)[-1]:
+        ERRORS.append(f'{worker_path.relative_to(ROOT)}: worker must supervise the 30-second calibration phase')
+
+    for pattern in ['moduleEnabled: true', 'faultLatched: false', 'shakeFreeToggleEnabled: false', 'jalState.faultLatched', 'jalState.moduleEnabled']:
+        if pattern not in html:
+            ERRORS.append(f'{html_path.relative_to(ROOT)}: inactive/fault tile state missing ({pattern})')
+
+    for pattern in ["'Kalibrierfenster_ms' => 1", "Kalibrierfenster_ms muss zwischen 30000 und 120000 ms", "'Modul_Aktiv' => 0", "'Fehler_Verriegelt' => 0"]:
+        if pattern not in diagnose:
+            ERRORS.append(f'{diagnose_path.relative_to(ROOT)}: diagnostics missing ({pattern})')
+
+    # The 30-second window is deliberately additional to MaxFahrt: MaxFahrt
+    # monitors the mechanical travel, while the output remains energized for
+    # the manufacturer's potential calibration routine.
+    if "GetValueBoolean(J_ID($rootID, '03_Bedienung', 'ShakeFree_Aktiv'))" in controller.split("100 % ZU erreicht; Kalibrierfenster gestartet", 1)[0].split('function J_HandleDeadline', 1)[-1]:
+        ERRORS.append(f'{controller_path.relative_to(ROOT)}: calibration window must run after every complete close, not only when ShakeFree is enabled')
+
+
 def main() -> int:
     check_required()
     check_root_structure()
@@ -393,6 +472,7 @@ def main() -> int:
     check_javascript()
     check_measured_blind_start_model()
     check_timing_examples()
+    check_calibration_window_and_fault_latch()
     check_php()
     if ERRORS:
         print('VALIDATION FAILED')

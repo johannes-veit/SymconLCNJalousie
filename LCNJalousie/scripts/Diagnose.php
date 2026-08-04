@@ -1,7 +1,7 @@
 <?php
 /**
  * Jalousiesteuerung LCN / IP-Symcon 9.0
- * V11.4 - Diagnose, Kompatibilitaets- und Installationspruefung
+ * V11.5 - Diagnose, Kompatibilitaets- und Installationspruefung
  *
  * Die Diagnose prueft die formale Symcon-/LCN-Konfiguration. Sie ersetzt
  * keine reale Inbetriebnahme mit Motor, Relaisrueckmeldung und LCN-Busmonitor.
@@ -154,7 +154,7 @@ foreach ($requiredCategories as $ident) {
 
 $variableSchema = [
     '01_Konfiguration' => [
-        'Projektname' => 3,
+        'Projektname' => 3, 'Modul_Aktiv' => 0,
         'LCN_Sendemodulinstanz_ID' => 1,
         'LCN_Aktormodulinstanz_ID' => 1,
         'Relais_AUF_ID' => 1, 'Relais_AB_ID' => 1,
@@ -162,7 +162,8 @@ $variableSchema = [
         'TS_KURZ_AUF' => 3, 'TS_KURZ_AB' => 3,
         'Gesamtlaufzeit_ms' => 1, 'Wendezeit_ms' => 1,
         'Sanftanlauf_ms' => 1, 'Behanglaufzeit_ms' => 1, 'Referenzreserve_ms' => 1,
-        'MaxFahrt_ms' => 1, 'ShakeFree_ms' => 1,
+        'MaxFahrt_ms' => 1, 'ShakeFree_ms' => 1, 'ShakeFree_Pause_ms' => 1,
+        'Kalibrierfenster_ms' => 1,
         'Relaisbestaetigung_ms' => 1, 'Stoppbestaetigung_ms' => 1,
         'Spaetstart_Schutz_ms' => 1, 'Workerfenster_ms' => 1,
         'Positionstoleranz' => 2, 'Lamellentoleranz' => 2,
@@ -179,6 +180,7 @@ $variableSchema = [
         'Phase' => 1, 'Position_Referenziert' => 0, 'Automatik_Aktiv' => 0,
         'Fehlertext' => 3, 'Letzte_Aktion' => 3,
         'Letzte_Fahrtdauer_ms' => 1, 'Letzte_Statusmeldung' => 1,
+        'Fehler_Verriegelt' => 0,
     ],
     '05_Intern' => [
         'Auftragsnummer' => 1, 'Auftragstyp' => 1, 'Erwartete_Richtung' => 1,
@@ -298,6 +300,7 @@ if ($errors === []) {
     $max = GetValueInteger((int) JD_ID($rootID, '01_Konfiguration', 'MaxFahrt_ms'));
     $shake = GetValueInteger((int) JD_ID($rootID, '01_Konfiguration', 'ShakeFree_ms'));
     $shakePause = GetValueInteger((int) JD_ID($rootID, '01_Konfiguration', 'ShakeFree_Pause_ms'));
+    $calibrationWindow = GetValueInteger((int) JD_ID($rootID, '01_Konfiguration', 'Kalibrierfenster_ms'));
     $startConfirm = GetValueInteger((int) JD_ID($rootID, '01_Konfiguration', 'Relaisbestaetigung_ms'));
     $stopConfirm = GetValueInteger((int) JD_ID($rootID, '01_Konfiguration', 'Stoppbestaetigung_ms'));
     $guard = GetValueInteger((int) JD_ID($rootID, '01_Konfiguration', 'Spaetstart_Schutz_ms'));
@@ -305,6 +308,10 @@ if ($errors === []) {
     $syncMs = GetValueInteger((int) JD_ID($rootID, '01_Konfiguration', 'Statussync_ms'));
     $coalesceMs = GetValueInteger((int) JD_ID($rootID, '01_Konfiguration', 'Relais_Koaleszenz_ms'));
     $healthSeconds = GetValueInteger((int) JD_ID($rootID, '01_Konfiguration', 'Healthcheck_s'));
+    $moduleEnabled = GetValueBoolean((int) JD_ID($rootID, '01_Konfiguration', 'Modul_Aktiv'));
+    $faultLatched = GetValueBoolean((int) JD_ID($rootID, '04_Istwerte', 'Fehler_Verriegelt'));
+    JD_Add($info, 'Symcon-Steuerung: ' . ($moduleEnabled ? 'aktiv konfiguriert' : 'im Modulmenue deaktiviert'));
+    JD_Add($info, 'Fehlerverriegelung: ' . ($faultLatched ? 'AKTIV – Quittierung erforderlich' : 'nicht aktiv'));
 
     if ($turn <= 0 || $softStart < 0 || $blind <= 0 || $total <= 0 || $max <= 0) {
         JD_Add($errors, 'Wende-, Behang-, Gesamt- und Maximalfahrzeit muessen positiv sein; Sanftanlauf darf 0 sein.');
@@ -320,6 +327,9 @@ if ($errors === []) {
     }
     if ($shakePause < 0 || $shakePause > 3000) {
         JD_Add($errors, 'ShakeFree_Pause_ms muss zwischen 0 und 3000 ms liegen.');
+    }
+    if ($calibrationWindow < 30000 || $calibrationWindow > 120000) {
+        JD_Add($errors, 'Kalibrierfenster_ms muss zwischen 30000 und 120000 ms liegen.');
     }
     if ($shake !== $turn) {
         JD_Add($warnings, 'ShakeFree_ms weicht von Wendezeit_ms ab. Laut Funktionsvorgabe ist die Gegenfahrt exakt eine Wendezeit.');

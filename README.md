@@ -53,7 +53,7 @@ Eine ausführliche Anleitung steht in [ERSTE_SCHRITTE.md](ERSTE_SCHRITTE.md).
 
 ## Entwicklungsstand
 
-**0.1.11 – öffentliche Beta.** Der Runtime-Kern basiert auf der tiefengeprüften V11.3-Skriptfassung. Das Modul automatisiert deren Aufbau und Konfiguration. Vor einem produktiven Motorbetrieb bleiben reale Tests mit Symcon 9.0, PCHK/PCK, LCN-Bus, Relais, Motor und Endlagen zwingend.
+**0.1.13 – öffentliche Beta.** Der Runtime-Kern basiert auf der tiefengeprüften V11.3-Skriptfassung. Das Modul automatisiert deren Aufbau und Konfiguration. Vor einem produktiven Motorbetrieb bleiben reale Tests mit Symcon 9.0, PCHK/PCK, LCN-Bus, Relais, Motor und Endlagen zwingend.
 
 ## Lizenz
 
@@ -72,3 +72,12 @@ Der STOP-Taster der Kachel ist kein separater LCN-STOP-Befehl. Der Controller we
 ## Symcon-Themefarben
 
 Die HTML-Kachel übernimmt Akzent-, Text- und Kartenfarbe direkt aus `--accent-color`, `--content-color` und `--card-color` der jeweils geöffneten Symcon-Visualisierung. Betriebssystem- oder Browser-Dark-Mode werden nicht separat ausgewertet.
+
+
+## Kalibrierfenster, Aktivschalter und Fehlerverriegelung
+
+Ab Version 0.1.13 besitzt jede Instanz die Eigenschaft **Symcon-Steuerung aktiv**. Wird sie ausgeschaltet, deaktiviert das Modul seine Ereignisse und Timer und sendet keine LCN-Befehle; die lokale LCN-Bedienung bleibt verfügbar.
+
+Nach einer vollständig von Symcon ausgeführten ZU-Fahrt auf 100 % bleibt die ZU-Ansteuerung für das eingestellte **Kalibrierfenster** (Vorgabe 30 Sekunden) unverändert aktiv. Währenddessen sendet Symcon keinen automatischen STOP und keinen Gegenbefehl. Erst nach Ablauf wird die ZU-Ansteuerung beendet. Ist ShakeFree weiterhin eingeschaltet, folgt die Gegenfahrt erst danach. Damit erhält eine im Antrieb autonom gestartete Endlagen-/Seilspannungsprüfung ein ungestörtes Zeitfenster.
+
+Bei einem Laufzeit- oder Aufbaufehler verriegelt sich die Instanz. Alle Modulereignisse und Timer werden deaktiviert und es werden keine weiteren LCN-Befehle gesendet. Die lokale LCN-Steuerung bleibt frei. Eine Quittierung ist erst möglich, wenn beide realen Relais AUS melden; die Quittierung selbst sendet keinen Motorbefehl und macht die Positionsreferenz vorsorglich ungültig.

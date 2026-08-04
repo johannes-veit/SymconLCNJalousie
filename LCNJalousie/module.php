@@ -11,7 +11,7 @@ declare(strict_types=1);
  */
 class LCNJalousie extends IPSModuleStrict
 {
-    private const VERSION = '0.1.12';
+    private const VERSION = '0.1.13';
     private const EXECUTE_PARENT_ACTION = '{7938A5A2-0981-5FE0-BE6C-8AA610D654EB}';
 
     private const STATUS_ACTIVE = 102;
@@ -26,6 +26,7 @@ class LCNJalousie extends IPSModuleStrict
     private const STATUS_LCN_FUNCTION_MISSING = 209;
     private const STATUS_STRUCTURE_ERROR = 210;
     private const STATUS_RELAY_CONFLICT = 211;
+    private const STATUS_FAULT_LATCHED = 212;
 
     public function Create(): void
     {
@@ -35,6 +36,7 @@ class LCNJalousie extends IPSModuleStrict
         $this->SetVisualizationType(1);
 
         $this->RegisterPropertyString('ProjectName', 'Jalousie Wohnzimmer');
+        $this->RegisterPropertyBoolean('ModuleEnabled', true);
         $this->RegisterPropertyInteger('LCNSendModuleID', 0);
         $this->RegisterPropertyInteger('LCNActorModuleID', 0);
         $this->RegisterPropertyInteger('RelayUpVariableID', 0);
@@ -53,6 +55,7 @@ class LCNJalousie extends IPSModuleStrict
         $this->RegisterPropertyInteger('MaxTravelMs', 187000);
         $this->RegisterPropertyInteger('ShakeFreeMs', 6500);
         $this->RegisterPropertyInteger('ShakeFreePauseMs', 500);
+        $this->RegisterPropertyInteger('CalibrationWindowMs', 30000);
         $this->RegisterPropertyInteger('RelayConfirmMs', 2500);
         $this->RegisterPropertyInteger('StopConfirmMs', 3000);
         $this->RegisterPropertyInteger('LateStartGuardMs', 5000);
@@ -70,6 +73,9 @@ class LCNJalousie extends IPSModuleStrict
 
         $this->RegisterAttributeString('GeneratedVersion', '');
         $this->RegisterAttributeString('LastValidation', '');
+        $this->RegisterAttributeBoolean('FaultLatched', false);
+        $this->RegisterAttributeString('FaultMessage', '');
+        $this->RegisterAttributeBoolean('RuntimeEnabled', false);
     }
 
     public function ApplyChanges(): void
@@ -97,15 +103,56 @@ class LCNJalousie extends IPSModuleStrict
 
             $validation = $this->validateConfiguration();
             $this->WriteAttributeString('LastValidation', json_encode($validation, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
-            $this->SetStatus($validation['status']);
-            $this->SetSummary($validation['status'] === self::STATUS_ACTIVE ? 'bereit' : 'Konfiguration unvollständig');
 
-            $this->setRuntimeEnabled($validation['status'] === self::STATUS_ACTIVE, $ids['scripts']);
+            $moduleEnabled = $this->ReadPropertyBoolean('ModuleEnabled');
+            $faultLatched = $this->ReadAttributeBoolean('FaultLatched');
+            $wasRuntimeEnabled = $this->ReadAttributeBoolean('RuntimeEnabled');
+            $runtimeEnabled = false;
+
+            if ($faultLatched) {
+                $this->SetStatus(self::STATUS_FAULT_LATCHED);
+                $this->SetSummary('inaktiv · Fehler quittieren');
+            } elseif (!$moduleEnabled) {
+                $this->SetStatus(104);
+                $this->SetSummary('inaktiv · nur LCN-Bedienung');
+            } else {
+                $this->SetStatus($validation['status']);
+                $this->SetSummary($validation['status'] === self::STATUS_ACTIVE ? 'bereit' : 'Konfiguration unvollständig');
+                $runtimeEnabled = $validation['status'] === self::STATUS_ACTIVE;
+            }
+
+            $this->setFaultStateVariable($faultLatched);
+            $this->setRuntimeEnabled($runtimeEnabled, $ids['scripts']);
+            $this->WriteAttributeBoolean('RuntimeEnabled', $runtimeEnabled);
+
+            if ($wasRuntimeEnabled && !$runtimeEnabled) {
+                $this->invalidateReferenceWithoutCommand($ids['state'], 'Symcon-Steuerung deaktiviert; lokale LCN-Bedienung bleibt frei');
+            }
+
+            if ($runtimeEnabled && !$wasRuntimeEnabled) {
+                $controllerID = @IPS_GetObjectIDByIdent('Controller', $ids['scripts']);
+                if ($controllerID !== false && IPS_ScriptExists((int) $controllerID)) {
+                    IPS_RunScriptWaitEx((int) $controllerID, ['ACTION' => 'INITIALIZE']);
+                }
+            }
+
             $this->SyncVisualization();
             $this->WriteAttributeString('GeneratedVersion', self::VERSION);
         } catch (Throwable $e) {
-            $this->SetStatus(self::STATUS_STRUCTURE_ERROR);
-            $this->SetSummary('Aufbaufehler');
+            $this->WriteAttributeBoolean('FaultLatched', true);
+            $this->WriteAttributeString('FaultMessage', 'Aufbaufehler: ' . $e->getMessage());
+            $this->WriteAttributeBoolean('RuntimeEnabled', false);
+            $scriptsCategoryID = @IPS_GetObjectIDByIdent('06_Skripte', $this->InstanceID);
+            if ($scriptsCategoryID !== false) {
+                try {
+                    $this->setRuntimeEnabled(false, (int) $scriptsCategoryID);
+                } catch (Throwable) {
+                    // Best effort: Ein beschädigter Objektbaum darf die
+                    // Fehlerverriegelung nicht erneut scheitern lassen.
+                }
+            }
+            $this->SetStatus(self::STATUS_FAULT_LATCHED);
+            $this->SetSummary('inaktiv · Aufbaufehler quittieren');
             $this->SendDebug('ApplyChanges', $e->getMessage(), 0);
             IPS_LogMessage('LCN Jalousie #' . $this->InstanceID, $e->getMessage());
         }
@@ -115,9 +162,12 @@ class LCNJalousie extends IPSModuleStrict
     {
         $validation = $this->validateConfiguration(false);
         $messages = $validation['messages'];
-        $summary = $messages === []
-            ? 'Die gespeicherte Konfiguration ist vollständig. Vor dem Motorbetrieb die LCN-PRO-Verriegelung und die TS-Belegung am Bus prüfen.'
-            : "Noch zu erledigen:\n• " . implode("\n• ", $messages);
+        $faultLatched = $this->ReadAttributeBoolean('FaultLatched');
+        $summary = $faultLatched
+            ? 'FEHLER VERRIEGELT: ' . ($this->ReadAttributeString('FaultMessage') ?: 'Fehler quittieren. Bis dahin sendet Symcon keine LCN-Befehle.')
+            : ($messages === []
+                ? 'Die gespeicherte Konfiguration ist vollständig. Vor dem Motorbetrieb die LCN-PRO-Verriegelung und die TS-Belegung am Bus prüfen.'
+                : "Noch zu erledigen:\n• " . implode("\n• ", $messages));
 
         $form = [
             'elements' => [
@@ -127,6 +177,7 @@ class LCNJalousie extends IPSModuleStrict
                     'expanded' => true,
                     'items' => [
                         ['type' => 'ValidationTextBox', 'name' => 'ProjectName', 'caption' => 'Name der Jalousie'],
+                        ['type' => 'CheckBox', 'name' => 'ModuleEnabled', 'caption' => 'Symcon-Steuerung aktiv (AUS = keine Befehle/Ereignisse; lokale LCN-Bedienung bleibt frei)'],
                         ['type' => 'CheckBox', 'name' => 'ShowTechnicalObjects', 'caption' => 'Technische Unterkategorien und Skripte im Objektbaum anzeigen'],
                     ],
                 ],
@@ -167,9 +218,11 @@ class LCNJalousie extends IPSModuleStrict
                         ['type' => 'NumberSpinner', 'name' => 'MaxTravelMs', 'caption' => 'Maximale überwachte Fahrt', 'suffix' => ' ms', 'minimum' => 1000],
                         ['type' => 'NumberSpinner', 'name' => 'ShakeFreeMs', 'caption' => 'ShakeFree-Gegenfahrt', 'suffix' => ' ms', 'minimum' => 100],
                         ['type' => 'NumberSpinner', 'name' => 'ShakeFreePauseMs', 'caption' => 'Umschaltpause vor ShakeFree-Gegenfahrt', 'suffix' => ' ms', 'minimum' => 0, 'maximum' => 3000],
+                        ['type' => 'NumberSpinner', 'name' => 'CalibrationWindowMs', 'caption' => 'Kalibrierfenster nach 100 % ZU vor ShakeFree', 'suffix' => ' ms', 'minimum' => 30000, 'maximum' => 120000],
                         ['type' => 'NumberSpinner', 'name' => 'PositionTolerance', 'caption' => 'Positionstoleranz', 'suffix' => ' %', 'digits' => 1, 'minimum' => 0.1, 'maximum' => 10],
                         ['type' => 'NumberSpinner', 'name' => 'SlatTolerance', 'caption' => 'Lamellentoleranz', 'suffix' => ' %', 'digits' => 1, 'minimum' => 0.1, 'maximum' => 10],
                         ['type' => 'Label', 'caption' => 'Bewegungsmodell: 0 % → AB ohne Vorlauf; 100 % → AUF mit voller Wendezeit; Zwischenposition gleiche Richtung mit Sanftanlauf; Gegenrichtung mit dem längeren Wert aus Sanftanlauf und Rest-Wendezeit.'],
+                        ['type' => 'Label', 'caption' => 'Nach jeder vollständigen ZU-Fahrt bleibt das AB-Relais für das Kalibrierfenster unverändert aktiv; Symcon sendet in dieser Zeit keinen STOP und keinen Gegenbefehl. ShakeFree startet – sofern aktiviert – erst danach.'],
                     ],
                 ],
                 [
@@ -200,6 +253,7 @@ class LCNJalousie extends IPSModuleStrict
             ],
             'status' => [
                 ['code' => self::STATUS_ACTIVE, 'icon' => 'active', 'caption' => 'Konfiguration vollständig – Laufzeit freigegeben'],
+                ['code' => 104, 'icon' => 'inactive', 'caption' => 'Symcon-Steuerung deaktiviert – lokale LCN-Bedienung bleibt aktiv'],
                 ['code' => self::STATUS_SEND_MODULE_MISSING, 'icon' => 'error', 'caption' => 'LCN-Sendemodul fehlt oder ist ungültig'],
                 ['code' => self::STATUS_ACTOR_MODULE_MISSING, 'icon' => 'error', 'caption' => 'LCN-Aktormodul fehlt oder ist ungültig'],
                 ['code' => self::STATUS_RELAY_UP_INVALID, 'icon' => 'error', 'caption' => 'Relaisstatus AUF fehlt, ist nicht Boolean oder ist nicht mit dem Aktormodul verbunden'],
@@ -211,6 +265,7 @@ class LCNJalousie extends IPSModuleStrict
                 ['code' => self::STATUS_LCN_FUNCTION_MISSING, 'icon' => 'error', 'caption' => 'Benötigte LCN-Funktionen fehlen'],
                 ['code' => self::STATUS_STRUCTURE_ERROR, 'icon' => 'error', 'caption' => 'Objektbaum oder Laufzeitskripte konnten nicht aufgebaut werden'],
                 ['code' => self::STATUS_RELAY_CONFLICT, 'icon' => 'error', 'caption' => 'AUF und AB melden gleichzeitig TRUE – Motorbetrieb gesperrt'],
+                ['code' => self::STATUS_FAULT_LATCHED, 'icon' => 'error', 'caption' => 'Fehler verriegelt – Symcon inaktiv bis zur Quittierung'],
             ],
         ];
 
@@ -219,6 +274,15 @@ class LCNJalousie extends IPSModuleStrict
 
     public function AcknowledgeFault(): string
     {
+        $relayUpID = $this->ReadPropertyInteger('RelayUpVariableID');
+        $relayDownID = $this->ReadPropertyInteger('RelayDownVariableID');
+        if (!$this->isBooleanVariable($relayUpID) || !$this->isBooleanVariable($relayDownID)) {
+            return 'Fehlerquittierung abgelehnt: Relaisstatusvariablen sind nicht gültig.';
+        }
+        if (GetValueBoolean($relayUpID) || GetValueBoolean($relayDownID)) {
+            return 'Fehlerquittierung abgelehnt: zuerst beide Relais lokal ausschalten.';
+        }
+
         $scriptsCategoryID = @IPS_GetObjectIDByIdent('06_Skripte', $this->InstanceID);
         if ($scriptsCategoryID === false) {
             return 'Skriptkategorie fehlt.';
@@ -227,16 +291,98 @@ class LCNJalousie extends IPSModuleStrict
         if ($controllerID === false || !IPS_ScriptExists((int) $controllerID)) {
             return 'Controller-Skript fehlt.';
         }
+
         IPS_RunScriptWaitEx((int) $controllerID, ['ACTION' => 'RESET_ERROR']);
+        $this->WriteAttributeBoolean('FaultLatched', false);
+        $this->WriteAttributeString('FaultMessage', '');
+        $this->setFaultStateVariable(false);
+
+        $stateCategoryID = @IPS_GetObjectIDByIdent('04_Istwerte', $this->InstanceID);
+        if ($stateCategoryID !== false) {
+            $this->invalidateReferenceWithoutCommand((int) $stateCategoryID, 'Fehler quittiert; erneute Referenzfahrt erforderlich');
+        }
+
+        $validation = $this->validateConfiguration();
+        $runtimeEnabled = $this->ReadPropertyBoolean('ModuleEnabled')
+            && $validation['status'] === self::STATUS_ACTIVE;
+        $this->setRuntimeEnabled($runtimeEnabled, (int) $scriptsCategoryID);
+        $this->WriteAttributeBoolean('RuntimeEnabled', $runtimeEnabled);
+
+        if (!$this->ReadPropertyBoolean('ModuleEnabled')) {
+            $this->SetStatus(104);
+            $this->SetSummary('inaktiv · nur LCN-Bedienung');
+            $this->SyncVisualization();
+            return 'Fehler quittiert. Die Symcon-Steuerung bleibt über das Modulmenü deaktiviert.';
+        }
+        if (!$runtimeEnabled) {
+            $this->SetStatus($validation['status']);
+            $this->SetSummary('Konfiguration unvollständig');
+            $this->SyncVisualization();
+            return 'Fehler quittiert. Die Konfiguration ist noch nicht vollständig.';
+        }
+
+        $this->SetStatus(self::STATUS_ACTIVE);
+        $this->SetSummary('bereit · Referenz erforderlich');
+        IPS_RunScriptWaitEx((int) $controllerID, ['ACTION' => 'INITIALIZE']);
         $this->SyncVisualization();
-        return 'Fehlerquittierung wurde ausgeführt. Es wird kein LCN-Befehl gesendet.';
+        return 'Fehler quittiert. Symcon wurde ohne LCN-Fahrbefehl reaktiviert; eine neue Referenzfahrt ist erforderlich.';
+    }
+
+    public function LatchFault(string $message): void
+    {
+        $message = trim($message) !== '' ? trim($message) : 'Unbekannter Laufzeitfehler';
+        $this->WriteAttributeBoolean('FaultLatched', true);
+        $this->WriteAttributeString('FaultMessage', $message);
+        $this->WriteAttributeBoolean('RuntimeEnabled', false);
+        $this->setFaultStateVariable(true);
+
+        $stateCategoryID = @IPS_GetObjectIDByIdent('04_Istwerte', $this->InstanceID);
+        if ($stateCategoryID !== false) {
+            $this->invalidateReferenceWithoutCommand((int) $stateCategoryID, 'FEHLER VERRIEGELT: ' . $message);
+        }
+        $controlCategoryID = @IPS_GetObjectIDByIdent('03_Bedienung', $this->InstanceID);
+        if ($controlCategoryID !== false) {
+            $shakeID = @IPS_GetObjectIDByIdent('ShakeFree_Aktiv', (int) $controlCategoryID);
+            if ($shakeID !== false && IPS_VariableExists((int) $shakeID)) {
+                SetValueBoolean((int) $shakeID, false);
+            }
+        }
+
+        $scriptsCategoryID = @IPS_GetObjectIDByIdent('06_Skripte', $this->InstanceID);
+        if ($scriptsCategoryID !== false) {
+            $this->setRuntimeEnabled(false, (int) $scriptsCategoryID);
+        }
+        $this->SetStatus(self::STATUS_FAULT_LATCHED);
+        $this->SetSummary('inaktiv · Fehler quittieren');
+        $this->SyncVisualization();
+    }
+
+    public function IsRuntimePermitted(): bool
+    {
+        return $this->ReadPropertyBoolean('ModuleEnabled')
+            && !$this->ReadAttributeBoolean('FaultLatched')
+            && $this->GetStatus() === self::STATUS_ACTIVE;
+    }
+
+    public function IsFaultLatched(): bool
+    {
+        return $this->ReadAttributeBoolean('FaultLatched');
     }
 
     public function RequestAction(string $Ident, mixed $Value): void
     {
+        if ($Ident === 'ResetError') {
+            $this->AcknowledgeFault();
+            return;
+        }
+        if (!$this->IsRuntimePermitted()) {
+            throw new RuntimeException('Jalousiesteuerung ist deaktiviert oder nach einem Fehler verriegelt. Zuerst Modul aktivieren beziehungsweise Fehler quittieren.');
+        }
         $validation = $this->validateConfiguration();
         if ($validation['status'] !== self::STATUS_ACTIVE) {
-            throw new RuntimeException('Jalousiesteuerung ist nicht freigegeben: ' . implode(' | ', $validation['messages']));
+            $message = 'Jalousiesteuerung ist nicht freigegeben: ' . implode(' | ', $validation['messages']);
+            $this->LatchFault($message);
+            throw new RuntimeException($message);
         }
 
         $scriptsCategoryID = @IPS_GetObjectIDByIdent('06_Skripte', $this->InstanceID);
@@ -392,6 +538,10 @@ class LCNJalousie extends IPSModuleStrict
             'phpVersion' => PHP_VERSION,
             'status' => IPS_GetInstance($this->InstanceID)['InstanceStatus'],
             'configuration' => [
+                'ModuleEnabled' => $this->ReadPropertyBoolean('ModuleEnabled'),
+                'FaultLatched' => $this->ReadAttributeBoolean('FaultLatched'),
+                'FaultMessage' => $this->ReadAttributeString('FaultMessage'),
+                'CalibrationWindowMs' => $this->ReadPropertyInteger('CalibrationWindowMs'),
                 'LCNSendModuleID' => $this->ReadPropertyInteger('LCNSendModuleID'),
                 'LCNActorModuleID' => $this->ReadPropertyInteger('LCNActorModuleID'),
                 'RelayUpVariableID' => $this->ReadPropertyInteger('RelayUpVariableID'),
@@ -484,17 +634,42 @@ class LCNJalousie extends IPSModuleStrict
 
         $position = max(0.0, min(100.0, $position));
         $rotation = max(0.0, min(100.0, $rotation));
-        $active = $this->GetStatus() === self::STATUS_ACTIVE;
-        $controlsEnabled = $active && !in_array($phase, [7, 9], true);
+        $moduleEnabled = $this->ReadPropertyBoolean('ModuleEnabled');
+        $faultLatched = $this->ReadAttributeBoolean('FaultLatched');
+        $active = $moduleEnabled && !$faultLatched && $this->GetStatus() === self::STATUS_ACTIVE;
+        $controlsEnabled = $active && !in_array($phase, [7, 9, 10], true);
         $positionTolerance = max(0.1, $this->ReadPropertyFloat('PositionTolerance'));
         $intermediateAllowed = $controlsEnabled && ($referenced || $this->ReadPropertyBoolean('AllowUnreferenced'));
         $moving = in_array($driveState, [1, 2], true);
-        $commandActive = in_array($phase, [1, 2, 3, 4, 5, 8], true);
+        $commandActive = in_array($phase, [1, 2, 3, 4, 5, 8, 10], true);
         $stopEnabled = $active
-            && ($moving || in_array($phase, [1, 2, 3, 4, 8], true));
-        $faultResetAllowed = $active && $phase === 7 && !$moving;
+            && ($moving || in_array($phase, [1, 2, 3, 4, 8, 10], true));
+        $realRelaysOff = true;
+        foreach ([$this->ReadPropertyInteger('RelayUpVariableID'), $this->ReadPropertyInteger('RelayDownVariableID')] as $relayID) {
+            if (!$this->isBooleanVariable($relayID) || GetValueBoolean($relayID)) {
+                $realRelaysOff = false;
+            }
+        }
+        $faultResetAllowed = $faultLatched && $realRelaysOff;
+        $shakeFreeToggleEnabled = $active && !in_array($phase, [7, 9], true);
+        $calibrationRemainingSeconds = 0;
+        if ($phase === 10) {
+            $internalCategoryID = @IPS_GetObjectIDByIdent('05_Intern', $this->InstanceID);
+            if ($internalCategoryID !== false) {
+                $deadlineID = @IPS_GetObjectIDByIdent('Zielzeit_ms', (int) $internalCategoryID);
+                if ($deadlineID !== false && IPS_VariableExists((int) $deadlineID)) {
+                    $deadline = GetValueFloat((int) $deadlineID);
+                    $nowMs = (float) hrtime(true) / 1_000_000.0;
+                    $calibrationRemainingSeconds = (int) max(0, ceil(($deadline - $nowMs) / 1000.0));
+                }
+            }
+        }
 
-        if ($driveState === 1) {
+        if ($phase === 10) {
+            $statusText = 'Kalibrierfenster' . ($calibrationRemainingSeconds > 0 ? ' ' . $calibrationRemainingSeconds . ' s' : '');
+            $statusKey = 'calibration';
+            $statusIcon = 'clock';
+        } elseif ($driveState === 1) {
             $statusText = 'fährt AUF';
             $statusKey = 'up';
             $statusIcon = 'arrow-up';
@@ -533,7 +708,11 @@ class LCNJalousie extends IPSModuleStrict
             'commandActive' => $commandActive,
             'referenced' => $referenced,
             'active' => $active,
+            'moduleEnabled' => $moduleEnabled,
+            'faultLatched' => $faultLatched,
             'controlsEnabled' => $controlsEnabled,
+            'shakeFreeToggleEnabled' => $shakeFreeToggleEnabled,
+            'calibrationRemainingSeconds' => $calibrationRemainingSeconds,
             'intermediateAllowed' => $intermediateAllowed,
             'stopEnabled' => $stopEnabled,
             'faultResetAllowed' => $faultResetAllowed,
@@ -654,8 +833,9 @@ class LCNJalousie extends IPSModuleStrict
         $max = $this->ReadPropertyInteger('MaxTravelMs');
         $window = $this->ReadPropertyInteger('WorkerWindowMs');
         $shakePause = $this->ReadPropertyInteger('ShakeFreePauseMs');
-        if ($total <= 0 || $turn <= 0 || $softStart < 0 || $softStart > $turn || $blind <= 0 || $turn + $blind !== $total || $max < $total + $reserve || $window < 1000 || $window > 3000 || $shakePause < 0 || $shakePause > 3000) {
-            $messages[] = 'Zeitparameter sind widersprüchlich: Gesamtlaufzeit AB→AUF = Wendezeit + Behanglaufzeit; 0 ≤ Sanftanlauf ≤ Wendezeit; MaxFahrt mindestens Gesamtlaufzeit + Reserve; Workerfenster 1000…3000 ms; ShakeFree-Umschaltpause 0…3000 ms.';
+        $calibrationWindow = $this->ReadPropertyInteger('CalibrationWindowMs');
+        if ($total <= 0 || $turn <= 0 || $softStart < 0 || $softStart > $turn || $blind <= 0 || $turn + $blind !== $total || $max < $total + $reserve || $window < 1000 || $window > 3000 || $shakePause < 0 || $shakePause > 3000 || $calibrationWindow < 30000 || $calibrationWindow > 120000) {
+            $messages[] = 'Zeitparameter sind widersprüchlich: Gesamtlaufzeit AB→AUF = Wendezeit + Behanglaufzeit; 0 ≤ Sanftanlauf ≤ Wendezeit; MaxFahrt mindestens Gesamtlaufzeit + Reserve; Workerfenster 1000…3000 ms; ShakeFree-Umschaltpause 0…3000 ms; Kalibrierfenster 30000…120000 ms.';
             if ($status === self::STATUS_ACTIVE) {
                 $status = self::STATUS_TIMING_INVALID;
             }
@@ -841,6 +1021,35 @@ class LCNJalousie extends IPSModuleStrict
         $this->SetValue('Referenziert', false);
     }
 
+    private function setFaultStateVariable(bool $latched): void
+    {
+        $stateCategoryID = @IPS_GetObjectIDByIdent('04_Istwerte', $this->InstanceID);
+        if ($stateCategoryID === false) {
+            return;
+        }
+        $faultID = @IPS_GetObjectIDByIdent('Fehler_Verriegelt', (int) $stateCategoryID);
+        if ($faultID !== false && IPS_VariableExists((int) $faultID)) {
+            SetValueBoolean((int) $faultID, $latched);
+        }
+    }
+
+    private function invalidateReferenceWithoutCommand(int $stateCategoryID, string $reason): void
+    {
+        $referencedID = @IPS_GetObjectIDByIdent('Position_Referenziert', $stateCategoryID);
+        if ($referencedID !== false && IPS_VariableExists((int) $referencedID)) {
+            SetValueBoolean((int) $referencedID, false);
+        }
+        $automaticID = @IPS_GetObjectIDByIdent('Automatik_Aktiv', $stateCategoryID);
+        if ($automaticID !== false && IPS_VariableExists((int) $automaticID)) {
+            SetValueBoolean((int) $automaticID, false);
+        }
+        $lastActionID = @IPS_GetObjectIDByIdent('Letzte_Aktion', $stateCategoryID);
+        if ($lastActionID !== false && IPS_VariableExists((int) $lastActionID)) {
+            SetValueString((int) $lastActionID, date('d.m.Y H:i:s') . ' - ' . $reason);
+        }
+        $this->SetValue('Referenziert', false);
+    }
+
     private function ensureProfiles(): void
     {
         $this->profile('LCNJAL.Position.Int', 1, 0, 100, 1, '', ' %', 'Shutter');
@@ -854,8 +1063,8 @@ class LCNJalousie extends IPSModuleStrict
         foreach ([[0, 'STOP', 'Stop', 0x808080], [1, 'AUF', 'ArrowUp', 0x4F81BD], [2, 'AB', 'ArrowDown', 0x70AD47], [3, 'FEHLER', 'Warning', 0xC00000]] as $a) {
             IPS_SetVariableProfileAssociation('LCNJAL.DriveState', $a[0], $a[1], $a[2], $a[3]);
         }
-        $this->profile('LCNJAL.Phase', 1, 0, 9, 0, '', '', 'Clock');
-        foreach ([0 => 'Ruhe', 1 => 'Warte Start', 2 => 'Behangfahrt', 3 => 'Lamellenfahrt', 4 => 'ShakeFree', 5 => 'Stoppen', 6 => 'Externe Bedienung', 7 => 'Fehler', 8 => 'Referenzfahrt', 9 => 'Statusabgleich'] as $v => $n) {
+        $this->profile('LCNJAL.Phase', 1, 0, 10, 0, '', '', 'Clock');
+        foreach ([0 => 'Ruhe', 1 => 'Warte Start', 2 => 'Behangfahrt', 3 => 'Lamellenfahrt', 4 => 'ShakeFree', 5 => 'Stoppen', 6 => 'Externe Bedienung', 7 => 'Fehler', 8 => 'Referenzfahrt', 9 => 'Statusabgleich', 10 => 'Kalibrierfenster'] as $v => $n) {
             IPS_SetVariableProfileAssociation('LCNJAL.Phase', $v, $n, '', -1);
         }
         $this->profile('LCNJAL.Direction', 1, 0, 3, 0, '', '', 'ArrowRight');
@@ -916,6 +1125,7 @@ class LCNJalousie extends IPSModuleStrict
     {
         $schema = [
             ['Projektname', 'Projektname', 3, '', 10, '', true],
+            ['Modul_Aktiv', 'Symcon-Steuerung aktiv', 0, '~Switch', 15, true, true],
             ['LCN_Sendemodulinstanz_ID', 'LCN-Sendemodulinstanz ID', 1, '', 20, 0, true],
             ['LCN_Aktormodulinstanz_ID', 'LCN-Aktormodulinstanz ID', 1, '', 30, 0, true],
             ['Relais_AUF_ID', 'Relais AUF Variable ID', 1, '', 40, 0, true],
@@ -933,6 +1143,7 @@ class LCNJalousie extends IPSModuleStrict
             ['MaxFahrt_ms', 'Maximale Fahrt [ms]', 1, '', 150, 0, true],
             ['ShakeFree_ms', 'ShakeFree Gegenfahrt [ms]', 1, '', 160, 0, true],
             ['ShakeFree_Pause_ms', 'ShakeFree Umschaltpause [ms]', 1, '', 165, 0, true],
+            ['Kalibrierfenster_ms', 'Kalibrierfenster vor ShakeFree [ms]', 1, '', 167, 30000, true],
             ['Relaisbestaetigung_ms', 'Startbestätigung [ms]', 1, '', 170, 0, true],
             ['Stoppbestaetigung_ms', 'Stoppbestätigung [ms]', 1, '', 180, 0, true],
             ['Spaetstart_Schutz_ms', 'Spätstart-Schutz [ms]', 1, '', 190, 0, true],
@@ -972,6 +1183,7 @@ class LCNJalousie extends IPSModuleStrict
         $this->variable($parentID, 'Letzte_Aktion', 'Letzte Aktion', 3, '', 80, 'Noch nicht initialisiert', false);
         $this->variable($parentID, 'Letzte_Fahrtdauer_ms', 'Letzte Fahrtdauer [ms]', 1, '', 90, 0, false);
         $this->variable($parentID, 'Letzte_Statusmeldung', 'Letzte Relaisstatusmeldung', 1, '~UnixTimestamp', 100, 0, false);
+        $this->variable($parentID, 'Fehler_Verriegelt', 'Fehler verriegelt', 0, '~Switch', 110, false, false);
     }
 
     private function createInternalVariables(int $parentID): void
@@ -1015,6 +1227,7 @@ class LCNJalousie extends IPSModuleStrict
     {
         $map = [
             'Projektname' => ['ProjectName', 3],
+            'Modul_Aktiv' => ['ModuleEnabled', 0],
             'LCN_Sendemodulinstanz_ID' => ['LCNSendModuleID', 1],
             'LCN_Aktormodulinstanz_ID' => ['LCNActorModuleID', 1],
             'Relais_AUF_ID' => ['RelayUpVariableID', 1],
@@ -1032,6 +1245,7 @@ class LCNJalousie extends IPSModuleStrict
             'MaxFahrt_ms' => ['MaxTravelMs', 1],
             'ShakeFree_ms' => ['ShakeFreeMs', 1],
             'ShakeFree_Pause_ms' => ['ShakeFreePauseMs', 1],
+            'Kalibrierfenster_ms' => ['CalibrationWindowMs', 1],
             'Relaisbestaetigung_ms' => ['RelayConfirmMs', 1],
             'Stoppbestaetigung_ms' => ['StopConfirmMs', 1],
             'Spaetstart_Schutz_ms' => ['LateStartGuardMs', 1],
@@ -1145,6 +1359,15 @@ class LCNJalousie extends IPSModuleStrict
         IPS_SetScriptTimer($workerID, 0);
         IPS_SetScriptTimer($healthID, $enabled ? $this->ReadPropertyInteger('HealthcheckSeconds') : 0);
 
+        if (!$enabled) {
+            $internalCategoryID = @IPS_GetObjectIDByIdent('05_Intern', $this->InstanceID);
+            if ($internalCategoryID !== false) {
+                $workerActiveID = @IPS_GetObjectIDByIdent('Worker_Aktiv', (int) $internalCategoryID);
+                if ($workerActiveID !== false && IPS_VariableExists((int) $workerActiveID)) {
+                    SetValueBoolean((int) $workerActiveID, false);
+                }
+            }
+        }
     }
 
     private function applyVisibility(array $ids): void

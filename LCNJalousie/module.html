@@ -696,7 +696,11 @@
         commandActive: false,
         referenced: false,
         active: false,
+        moduleEnabled: true,
+        faultLatched: false,
         controlsEnabled: false,
+        shakeFreeToggleEnabled: false,
+        calibrationRemainingSeconds: 0,
         intermediateAllowed: false,
         stopEnabled: false,
         faultResetAllowed: false,
@@ -735,7 +739,7 @@
     }
 
     function sendJalousieAction(ident, value) {
-        if (!jalState.active) {
+        if (!jalState.active && ident !== 'ResetError') {
             showLocalWarning('Die Modulkonfiguration ist nicht freigegeben.');
             return;
         }
@@ -844,7 +848,7 @@
 
         const shakeSwitch = byId('jal-shakefree');
         shakeSwitch.checked = Boolean(jalState.shakeFree);
-        shakeSwitch.disabled = !controlsEnabled;
+        shakeSwitch.disabled = !Boolean(jalState.shakeFreeToggleEnabled);
         byId('jal-shakefree-text').textContent = shakeSwitch.checked ? 'Ein' : 'Aus';
 
         const statusKey = jalState.statusKey || 'stopped';
@@ -865,11 +869,15 @@
             line.style.transform = `rotate(${slatAngle}deg)`;
         });
 
-        const warningText = !active
-            ? 'Konfiguration unvollständig – Bedienung gesperrt.'
-            : (Number(jalState.phase) === 9
-                ? 'LCN-Statusabgleich läuft – Bedienung kurz gesperrt.'
-                : (jalState.errorText || ''));
+        const warningText = Boolean(jalState.faultLatched)
+            ? (jalState.errorText || 'Fehler verriegelt – Symcon ist bis zur Quittierung inaktiv. Lokale LCN-Bedienung bleibt frei.')
+            : (!Boolean(jalState.moduleEnabled)
+                ? 'Symcon-Steuerung im Modulmenü deaktiviert – lokale LCN-Bedienung bleibt frei.'
+                : (!active
+                    ? 'Konfiguration unvollständig – Bedienung gesperrt.'
+                    : (Number(jalState.phase) === 9
+                        ? 'LCN-Statusabgleich läuft – Bedienung kurz gesperrt.'
+                        : (jalState.errorText || ''))));
         const warning = byId('jal-warning-text');
         warning.textContent = warningText;
         byId('jal-reset-error').hidden = !Boolean(jalState.faultResetAllowed);
