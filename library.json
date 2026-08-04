@@ -1,0 +1,12 @@
+{
+    "id": "{EE48C4AA-DAE4-4652-893E-DDA533ACED47}",
+    "author": "Projekt Jalousiesteuerung",
+    "name": "Symcon LCN Jalousie",
+    "url": "",
+    "compatibility": {
+        "version": "9.0"
+    },
+    "version": "0.1",
+    "build": 1,
+    "date": 1785826300
+}

@@ -1,0 +1,14 @@
+{
+    "id": "{3CAB0009-8B64-4D46-B7F5-B49C4A14A7E2}",
+    "name": "LCN Jalousie Konfigurator",
+    "type": 4,
+    "vendor": "LCN Jalousie",
+    "aliases": [
+        "LCN Jalousien verwalten"
+    ],
+    "url": "",
+    "parentRequirements": [],
+    "childRequirements": [],
+    "implemented": [],
+    "prefix": "LCNJALCFG"
+}

@@ -1,0 +1,15 @@
+{
+    "id": "{3057B192-E835-4916-AF1D-D89D6302DF74}",
+    "name": "LCN Jalousie",
+    "type": 3,
+    "vendor": "LCN Jalousie",
+    "aliases": [
+        "LCN Jalousiesteuerung",
+        "LCN Raffstore"
+    ],
+    "url": "",
+    "parentRequirements": [],
+    "childRequirements": [],
+    "implemented": [],
+    "prefix": "LCNJAL"
+}
