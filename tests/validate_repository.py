@@ -122,6 +122,23 @@ def check_configurator_configuration_object() -> None:
             f'{path.relative_to(ROOT)}: empty create.configuration should use new stdClass() so json_encode emits {{}}'
         )
 
+
+def check_lcn_connection_chain_validation() -> None:
+    path = ROOT / 'LCNJalousie' / 'module.php'
+    if not path.is_file():
+        return
+    php = path.read_text(encoding='utf-8')
+    required = [
+        "['ConnectionID']",
+        'instanceConnectionChainContains',
+        'IPS_GetInstance($currentInstanceID)',
+    ]
+    for pattern in required:
+        if pattern not in php:
+            ERRORS.append(
+                f'{path.relative_to(ROOT)}: physical LCN assignment validation must follow instance ConnectionID ({pattern} missing)'
+            )
+
 def main() -> int:
     check_required()
     check_root_structure()
@@ -129,6 +146,7 @@ def main() -> int:
         check_json(path)
     check_metadata()
     check_configurator_configuration_object()
+    check_lcn_connection_chain_validation()
     check_php()
     if ERRORS:
         print('VALIDATION FAILED')

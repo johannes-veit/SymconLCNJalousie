@@ -11,7 +11,7 @@ declare(strict_types=1);
  */
 class LCNJalousie extends IPSModuleStrict
 {
-    private const VERSION = '0.1.3';
+    private const VERSION = '0.1.5';
     private const EXECUTE_PARENT_ACTION = '{7938A5A2-0981-5FE0-BE6C-8AA610D654EB}';
 
     private const STATUS_ACTIVE = 102;
@@ -183,9 +183,9 @@ class LCNJalousie extends IPSModuleStrict
                 ['code' => self::STATUS_ACTIVE, 'icon' => 'active', 'caption' => 'Konfiguration vollständig – Laufzeit freigegeben'],
                 ['code' => self::STATUS_SEND_MODULE_MISSING, 'icon' => 'error', 'caption' => 'LCN-Sendemodul fehlt oder ist ungültig'],
                 ['code' => self::STATUS_ACTOR_MODULE_MISSING, 'icon' => 'error', 'caption' => 'LCN-Aktormodul fehlt oder ist ungültig'],
-                ['code' => self::STATUS_RELAY_UP_INVALID, 'icon' => 'error', 'caption' => 'Relaisstatus AUF fehlt oder ist nicht Boolean'],
-                ['code' => self::STATUS_RELAY_DOWN_INVALID, 'icon' => 'error', 'caption' => 'Relaisstatus AB fehlt oder ist nicht Boolean'],
-                ['code' => self::STATUS_GT8_INVALID, 'icon' => 'error', 'caption' => 'GT8-LANG-Variablen fehlen oder sind nicht Boolean'],
+                ['code' => self::STATUS_RELAY_UP_INVALID, 'icon' => 'error', 'caption' => 'Relaisstatus AUF fehlt, ist nicht Boolean oder ist nicht mit dem Aktormodul verbunden'],
+                ['code' => self::STATUS_RELAY_DOWN_INVALID, 'icon' => 'error', 'caption' => 'Relaisstatus AB fehlt, ist nicht Boolean oder ist nicht mit dem Aktormodul verbunden'],
+                ['code' => self::STATUS_GT8_INVALID, 'icon' => 'error', 'caption' => 'GT8-LANG-Variablen fehlen, sind nicht Boolean oder sind nicht mit dem Sendemodul verbunden'],
                 ['code' => self::STATUS_DUPLICATE_OBJECTS, 'icon' => 'error', 'caption' => 'AUF/AB-Zuordnungen sind identisch'],
                 ['code' => self::STATUS_TS_INVALID, 'icon' => 'error', 'caption' => 'TS-Datenfelder ungültig oder noch nicht bestätigt'],
                 ['code' => self::STATUS_TIMING_INVALID, 'icon' => 'error', 'caption' => 'Zeitparameter sind widersprüchlich'],
@@ -404,15 +404,49 @@ class LCNJalousie extends IPSModuleStrict
         if (!IPS_VariableExists($variableID) || !IPS_InstanceExists($expectedInstanceID)) {
             return false;
         }
-        $current = IPS_GetParent($variableID);
-        $guard = 0;
-        while ($current > 0 && $guard < 32) {
-            if ($current === $expectedInstanceID) {
+
+        // IPS_GetParent() beschreibt nur die frei verschiebbare logische
+        // Objektbaum-Hierarchie. Die physische Device -> Splitter -> I/O-
+        // Verbindung wird bei Instanzen dagegen über ConnectionID abgebildet.
+        // LCN-Statusvariablen liegen unter Relais-/Ausgangsinstanzen, deren
+        // ConnectionID auf die ausgewählte LCN-Modulinstanz zeigt.
+        $currentObjectID = IPS_GetParent($variableID);
+        $logicalGuard = 0;
+        while ($currentObjectID > 0 && $logicalGuard < 32) {
+            if ($currentObjectID === $expectedInstanceID) {
                 return true;
             }
-            $current = IPS_GetParent($current);
-            $guard++;
+
+            if (IPS_InstanceExists($currentObjectID)
+                && $this->instanceConnectionChainContains($currentObjectID, $expectedInstanceID)) {
+                return true;
+            }
+
+            $currentObjectID = IPS_GetParent($currentObjectID);
+            $logicalGuard++;
         }
+
+        return false;
+    }
+
+    private function instanceConnectionChainContains(int $startInstanceID, int $expectedInstanceID): bool
+    {
+        $currentInstanceID = $startInstanceID;
+        $visited = [];
+
+        for ($guard = 0; $guard < 32 && $currentInstanceID > 0; $guard++) {
+            if ($currentInstanceID === $expectedInstanceID) {
+                return true;
+            }
+            if (isset($visited[$currentInstanceID]) || !IPS_InstanceExists($currentInstanceID)) {
+                return false;
+            }
+
+            $visited[$currentInstanceID] = true;
+            $instance = IPS_GetInstance($currentInstanceID);
+            $currentInstanceID = (int) ($instance['ConnectionID'] ?? 0);
+        }
+
         return false;
     }
 

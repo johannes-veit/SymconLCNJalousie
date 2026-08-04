@@ -1,5 +1,12 @@
 # Änderungsprotokoll
 
+## 0.1.5 – 2026-08-04
+
+- Kritische Zuordnungsprüfung korrigiert: LCN-Relais- und Ausgangsvariablen werden jetzt über die physische Symcon-Instanzverbindung (`ConnectionID`) bis zur gewählten LCN-Modulinstanz geprüft.
+- Die logische Objektbaum-Position (`IPS_GetParent`) wird nicht mehr fälschlich als alleinige Hardware-Verbindungskette interpretiert.
+- Statusmeldungen für ungültige Relais- und GT8-Zuordnungen präzisiert.
+- Repository-Prüfung um die Kontrolle der `ConnectionID`-basierten Zuordnungslogik erweitert.
+
 ## 0.1.3 – 2026-08-04
 
 - Kritischen Konfiguratorfehler behoben: `create.configuration` wird nun als JSON-Objekt `{}` statt als Array `[]` ausgegeben.

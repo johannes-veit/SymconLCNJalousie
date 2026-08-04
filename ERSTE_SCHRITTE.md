@@ -20,7 +20,7 @@ Diese Anleitung führt Sie ohne Git-Vorkenntnisse vom vorbereiteten Ordner bis z
 
 ## B. Ersten Stand speichern und öffentlich veröffentlichen
 
-1. Unten links bei **Summary** tragen Sie ein: `Fix configurator class name 0.1.3`.
+1. Unten links bei **Summary** tragen Sie ein: `Fix LCN connection chain validation 0.1.5`.
 2. Klicken Sie auf **Commit to main**.
 3. Klicken Sie oben auf **Publish repository**.
 4. Kontrollieren Sie den Namen `SymconLCNJalousie`.
