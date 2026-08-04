@@ -53,14 +53,14 @@ Eine ausführliche Anleitung steht in [ERSTE_SCHRITTE.md](ERSTE_SCHRITTE.md).
 
 ## Entwicklungsstand
 
-**0.1.9 – öffentliche Beta.** Der Runtime-Kern basiert auf der tiefengeprüften V11.3-Skriptfassung. Das Modul automatisiert deren Aufbau und Konfiguration. Vor einem produktiven Motorbetrieb bleiben reale Tests mit Symcon 9.0, PCHK/PCK, LCN-Bus, Relais, Motor und Endlagen zwingend.
+**0.1.11 – öffentliche Beta.** Der Runtime-Kern basiert auf der tiefengeprüften V11.3-Skriptfassung. Das Modul automatisiert deren Aufbau und Konfiguration. Vor einem produktiven Motorbetrieb bleiben reale Tests mit Symcon 9.0, PCHK/PCK, LCN-Bus, Relais, Motor und Endlagen zwingend.
 
 ## Lizenz
 
 MIT – siehe [LICENSE](LICENSE).
 ## Eigene Symcon-Kachel und Referenzierung
 
-Ab Version 0.1.9 nutzt die Geräteinstanz das offizielle Symcon HTML-SDK für eine eigene, interaktive Jalousiekachel. Der Behang wird über einen vertikalen Slider und drei gleich große runde Tasten `AUF`, `STOP`, `ZU` bedient. Der Lamellenbereich enthält eine dynamische Lamellengrafik, einen vertikalen Slider und die Schnellwahltasten 0/50/100 %. Beide Slider zeigen 0 % oben und 100 % unten; die Prozentanzeige steht jeweils unterhalb der unteren Beschriftung. ShakeFree und der kompakte Laufstatus bleiben sichtbar. Die Kachel verwendet Symcon-Icons über `/icons.js`, übernimmt den Hell-/Dunkelmodus aus der Symcon-Visualisierung und sendet Benutzeraktionen ausschließlich über `requestAction()` an die Modulinstanz.
+Ab Version 0.1.11 nutzt die Geräteinstanz das offizielle Symcon HTML-SDK für eine eigene, interaktive Jalousiekachel. Behang und Lamellen sind identisch aufgebaut: links drei gleich große runde Tasten, mittig eine dynamische grafische Statusanzeige und rechts ein vertikaler Slider. Beim Behang lauten die Tasten `AUF`, `STOP`, `ZU`; bei den Lamellen `AUF`, `MITTE`, `ZU`. Beide Slider zeigen 0 % oben und 100 % unten. Der kompakte Laufstatus und der ShakeFree-Schalter bleiben sichtbar. Der optische Tastenkranz kennzeichnet nur einen laufenden Auftrag und verschwindet nach dessen Abschluss automatisch. Die Kachel verwendet Symcon-Icons über `/icons.js`, übernimmt Akzent-, Text- und Kartenfarbe direkt aus der geöffneten Symcon-Visualisierung und sendet Benutzeraktionen ausschließlich über `requestAction()` an die Modulinstanz.
 
 Die direkten Statusvariablen `Position`, `Drehgrad` und `Position gültig` bleiben erhalten, damit die Werte auch in der Listenansicht und für Automationen verfügbar sind. `Position` verwendet 0 % = vollständig offen und 100 % = vollständig geschlossen; `Drehgrad` verwendet 0 % in AUF-Richtung und 100 % in AB-Richtung.
 
@@ -68,3 +68,7 @@ Nach einem Neustart oder einer Neuinitialisierung ist die angezeigte Zahl zunäc
 
 Der STOP-Taster der Kachel ist kein separater LCN-STOP-Befehl. Der Controller wertet die realen Relaisrückmeldungen aus und sendet den KURZ-Befehl der tatsächlich aktiven Richtung erneut, sodass das aktive LCN-Relais ausgeschaltet wird.
 
+
+## Symcon-Themefarben
+
+Die HTML-Kachel übernimmt Akzent-, Text- und Kartenfarbe direkt aus `--accent-color`, `--content-color` und `--card-color` der jeweils geöffneten Symcon-Visualisierung. Betriebssystem- oder Browser-Dark-Mode werden nicht separat ausgewertet.

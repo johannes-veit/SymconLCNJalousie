@@ -1,33 +1,21 @@
 <script src="/icons.js"></script>
 <style>
     :root {
-        color-scheme: light;
-        --jal-accent: #00bfa5;
-        --jal-accent-strong: #008f7a;
-        --jal-danger: #c93636;
-        --jal-warning: #e6a400;
-        --jal-text: #17212b;
-        --jal-muted: #66717d;
-        --jal-line: rgba(74, 91, 107, 0.22);
-        --jal-surface: rgba(255, 255, 255, 0.82);
-        --jal-surface-strong: #ffffff;
-        --jal-button-text: #10201d;
-        --jal-shadow: 0 3px 12px rgba(20, 35, 50, 0.12);
-    }
-
-    :root[data-jal-theme="dark"] {
-        color-scheme: dark;
-        --jal-accent: #15cdb0;
-        --jal-accent-strong: #6de2cf;
-        --jal-danger: #e45b5b;
-        --jal-warning: #ffc33d;
-        --jal-text: #f2f6f8;
-        --jal-muted: #b7c0c8;
-        --jal-line: rgba(218, 229, 238, 0.20);
-        --jal-surface: rgba(36, 43, 50, 0.82);
-        --jal-surface-strong: #2c343c;
-        --jal-button-text: #f2f6f8;
-        --jal-shadow: 0 3px 12px rgba(0, 0, 0, 0.30);
+        /*
+         * Die HTML-SDK-Kachel übernimmt ausschließlich die von Symcon
+         * bereitgestellten Farben der aktuell geöffneten Visualisierung.
+         * Weder Browser- noch Betriebssystem-Dark-Mode werden ausgewertet.
+         */
+        --jal-accent: var(--accent-color, #00bfa5);
+        --jal-text: var(--content-color, #17212b);
+        --jal-muted: color-mix(in srgb, var(--content-color, #17212b) 62%, transparent);
+        --jal-surface: var(--card-color, #ffffff);
+        --jal-line: color-mix(in srgb, var(--content-color, #17212b) 20%, transparent);
+        --jal-shadow: 0 3px 12px rgba(0, 0, 0, 0.13);
+        --jal-button-size: clamp(58px, 7vw, 78px);
+        --jal-graphic-width: clamp(82px, 10vw, 112px);
+        --jal-graphic-height: clamp(155px, 24vh, 215px);
+        --jal-slider-column-width: clamp(56px, 6vw, 72px);
     }
 
     * {
@@ -59,19 +47,21 @@
     .jal-tile {
         width: 100%;
         height: 100%;
-        min-height: 300px;
+        min-height: 310px;
         position: relative;
         display: grid;
         grid-template-rows: minmax(0, 1fr) auto;
         gap: clamp(8px, 1.3vh, 14px);
         padding: clamp(8px, 1.5vw, 16px);
         overflow: hidden;
+        color: var(--jal-text);
+        background: transparent;
     }
 
     .jal-main {
         min-height: 0;
         display: grid;
-        grid-template-columns: repeat(2, minmax(240px, 1fr));
+        grid-template-columns: repeat(2, minmax(285px, 1fr));
         gap: clamp(10px, 1.8vw, 22px);
         align-items: stretch;
     }
@@ -85,6 +75,7 @@
         padding: clamp(10px, 1.4vw, 16px);
         border: 1px solid var(--jal-line);
         border-radius: 14px;
+        color: var(--jal-text);
         background: var(--jal-surface);
         box-shadow: var(--jal-shadow);
     }
@@ -100,55 +91,58 @@
         line-height: 1.1;
     }
 
-    .jal-panel-title i,
-    .jal-panel-title svg {
-        color: var(--jal-accent-strong);
+    .jal-panel-title i {
+        color: var(--jal-accent);
     }
 
-    .jal-blind-layout {
+    /*
+     * Beide Bedienfelder nutzen exakt dieselbe Dreispalten-Geometrie:
+     * links Tasten, mittig Grafik, rechts Slider. Dadurch fluchten die
+     * Elemente auch dann, wenn die Kacheln auf dem Smartphone untereinander
+     * dargestellt werden.
+     */
+    .jal-control-layout {
         min-height: 0;
         display: grid;
-        grid-template-columns: minmax(72px, 0.68fr) minmax(58px, 0.52fr);
-        justify-content: center;
-        gap: clamp(12px, 2vw, 28px);
+        grid-template-columns:
+            minmax(var(--jal-button-size), 0.78fr)
+            minmax(var(--jal-graphic-width), 1fr)
+            minmax(var(--jal-slider-column-width), 0.66fr);
+        gap: clamp(8px, 1.4vw, 18px);
         align-items: center;
+        justify-items: center;
     }
 
     .jal-round-stack {
+        width: 100%;
         height: 100%;
-        min-height: 210px;
+        min-height: 218px;
         display: grid;
-        grid-template-rows: repeat(3, minmax(58px, 1fr));
+        grid-template-rows: repeat(3, minmax(var(--jal-button-size), 1fr));
         justify-items: center;
         align-items: center;
         gap: clamp(7px, 1vh, 12px);
     }
 
     .jal-round-button {
-        width: clamp(58px, 8.2vw, 82px);
-        max-height: 82px;
-        aspect-ratio: 1;
+        width: var(--jal-button-size);
+        height: var(--jal-button-size);
         border: 0;
         border-radius: 50%;
         display: grid;
         grid-template-rows: 1fr auto;
         place-items: center;
         gap: 1px;
-        padding: 10px 6px 7px;
+        padding: 9px 5px 7px;
         color: #ffffff;
-        background: var(--jal-accent-strong);
-        box-shadow: 0 3px 9px rgba(0, 143, 122, 0.28);
+        background: var(--jal-accent);
+        box-shadow: 0 3px 9px color-mix(in srgb, var(--jal-accent) 34%, transparent);
         cursor: pointer;
-        transition: transform 120ms ease, filter 120ms ease, opacity 120ms ease;
-    }
-
-    .jal-round-button.is-stop {
-        background: var(--jal-danger);
-        box-shadow: 0 3px 9px rgba(201, 54, 54, 0.30);
+        transition: transform 120ms ease, filter 120ms ease, opacity 120ms ease, box-shadow 120ms ease;
     }
 
     .jal-round-button:hover:not(:disabled) {
-        filter: brightness(1.08);
+        filter: brightness(1.07);
         transform: scale(1.025);
     }
 
@@ -162,27 +156,138 @@
         box-shadow: none;
     }
 
-    .jal-round-button i,
-    .jal-round-button svg {
-        font-size: clamp(20px, 3vw, 31px);
+    .jal-round-button i {
+        font-size: clamp(20px, 2.7vw, 30px);
     }
 
     .jal-round-button span {
-        font-size: clamp(10px, 1.1vw, 13px);
-        font-weight: 750;
-        letter-spacing: 0.03em;
+        font-size: clamp(9px, 1vw, 12px);
+        font-weight: 760;
+        letter-spacing: 0.025em;
     }
 
+    /*
+     * Der Kranz zeigt ausschließlich einen aktuell laufenden bzw. gerade
+     * angeforderten Befehl. Nach Abschluss (Phase Ruhe/Auftragstyp 0) wird er
+     * durch die nächste Statusnachricht automatisch entfernt.
+     */
     .jal-round-button.is-current:not(:disabled) {
-        outline: 3px solid color-mix(in srgb, var(--jal-accent) 45%, transparent);
-        outline-offset: 2px;
+        box-shadow:
+            0 0 0 4px color-mix(in srgb, var(--jal-accent) 42%, transparent),
+            0 3px 9px color-mix(in srgb, var(--jal-accent) 34%, transparent);
+    }
+
+    .jal-graphic-wrap {
+        width: 100%;
+        height: 100%;
+        min-height: 218px;
+        display: grid;
+        place-items: center;
+    }
+
+    .jal-device-graphic {
+        width: var(--jal-graphic-width);
+        height: var(--jal-graphic-height);
+        min-height: 155px;
+        position: relative;
+        display: grid;
+        grid-template-rows: 11px minmax(0, 1fr) 7px;
+        gap: 4px;
+        color: var(--jal-text);
+    }
+
+    .jal-graphic-head,
+    .jal-graphic-foot {
+        border-radius: 999px;
+        background: currentColor;
+        opacity: 0.92;
+    }
+
+    .jal-graphic-foot {
+        height: 4px;
+        align-self: end;
+    }
+
+    /* Behanggrafik: 0 % = leer/offen, 100 % = vollständig heruntergefahren. */
+    .jal-blind-window {
+        min-height: 0;
+        position: relative;
+        overflow: hidden;
+        border-left: 1px solid var(--jal-line);
+        border-right: 1px solid var(--jal-line);
+    }
+
+    .jal-blind-sun {
+        position: absolute;
+        inset: 50% auto auto 50%;
+        transform: translate(-50%, -50%);
+        color: #f2b91f;
+        font-size: clamp(26px, 4vw, 42px);
+        opacity: 0.92;
+    }
+
+    .jal-blind-curtain {
+        position: absolute;
+        inset: 0 0 auto 0;
+        height: 0%;
+        overflow: hidden;
+        transition: height 330ms linear;
+        color: var(--jal-text);
+    }
+
+    .jal-blind-lines {
+        position: absolute;
+        inset: 6px 8px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        gap: 4px;
+    }
+
+    .jal-blind-line {
+        height: 5px;
+        flex: 0 0 5px;
+        border-radius: 999px;
+        background: currentColor;
+        opacity: 0.96;
+    }
+
+    .jal-graphic-symbol {
+        position: absolute;
+        right: -4px;
+        bottom: -3px;
+        color: var(--jal-accent);
+        font-size: clamp(14px, 2vw, 21px);
+        opacity: 0.92;
+    }
+
+    /* Lamellengrafik: gleiche Außenmaße wie die Behanggrafik. */
+    .jal-slat-field {
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        gap: 5px;
+        padding: 5px 7px;
+        overflow: hidden;
+    }
+
+    .jal-slat-line {
+        height: 5px;
+        flex: 0 0 5px;
+        border-radius: 999px;
+        background: currentColor;
+        transform: rotate(-55deg);
+        transform-origin: center;
+        transition: transform 260ms ease;
     }
 
     .jal-slider-column {
+        width: 100%;
         height: 100%;
-        min-height: 215px;
+        min-height: 218px;
         display: grid;
-        grid-template-rows: auto minmax(130px, 1fr) auto auto;
+        grid-template-rows: auto minmax(135px, 1fr) auto auto;
         justify-items: center;
         align-items: center;
         gap: 4px;
@@ -203,7 +308,7 @@
     .jal-slider {
         width: 30px;
         height: 100%;
-        min-height: 135px;
+        min-height: 140px;
         margin: 0;
         accent-color: var(--jal-accent);
         writing-mode: vertical-lr;
@@ -225,116 +330,8 @@
         text-align: center;
         font-weight: 750;
         font-variant-numeric: tabular-nums;
-        background: var(--jal-surface-strong);
-    }
-
-    .jal-slat-layout {
-        min-height: 0;
-        display: grid;
-        grid-template-columns: minmax(72px, 0.62fr) minmax(58px, 0.50fr) minmax(108px, 1fr);
-        gap: clamp(8px, 1.3vw, 16px);
-        align-items: center;
-    }
-
-    .jal-slat-graphic-wrap {
-        height: 100%;
-        min-height: 205px;
-        display: grid;
-        place-items: center;
-    }
-
-    .jal-slat-graphic {
-        width: clamp(60px, 8.2vw, 88px);
-        height: clamp(128px, 22vh, 190px);
-        position: relative;
-        display: grid;
-        grid-template-rows: 11px minmax(0, 1fr) 7px;
-        gap: 4px;
         color: var(--jal-text);
-    }
-
-    .jal-slat-head,
-    .jal-slat-foot {
-        border-radius: 999px;
-        background: currentColor;
-        opacity: 0.92;
-    }
-
-    .jal-slat-foot {
-        height: 4px;
-        align-self: end;
-    }
-
-    .jal-slat-field {
-        min-height: 0;
-        display: flex;
-        flex-direction: column;
-        justify-content: space-between;
-        gap: 5px;
-        padding: 5px 7px;
-        overflow: hidden;
-    }
-
-    .jal-slat-line {
-        height: 5px;
-        flex: 0 0 5px;
-        border-radius: 999px;
-        background: currentColor;
-        transform: rotate(-55deg);
-        transform-origin: center;
-        transition: transform 260ms ease;
-    }
-
-    .jal-slat-symbol {
-        position: absolute;
-        right: -3px;
-        bottom: -2px;
-        color: var(--jal-accent-strong);
-        font-size: clamp(14px, 2vw, 21px);
-        opacity: 0.90;
-    }
-
-    .jal-presets {
-        min-width: 0;
-        height: 100%;
-        min-height: 205px;
-        display: grid;
-        grid-template-rows: repeat(3, minmax(44px, 1fr));
-        gap: clamp(7px, 1vh, 12px);
-        align-items: stretch;
-    }
-
-    .jal-preset {
-        min-width: 0;
-        border: 2px solid var(--jal-accent);
-        border-radius: 8px;
-        padding: 7px 8px;
-        color: var(--jal-button-text);
-        background: var(--jal-surface-strong);
-        cursor: pointer;
-        font-size: clamp(11px, 1.25vw, 17px);
-        font-weight: 700;
-        line-height: 1.15;
-        transition: background 120ms ease, transform 120ms ease, opacity 120ms ease;
-    }
-
-    .jal-preset:hover:not(:disabled),
-    .jal-preset.is-current {
-        background: rgba(0, 191, 165, 0.23);
-    }
-
-    :root[data-jal-theme="dark"] .jal-preset:hover:not(:disabled),
-    :root[data-jal-theme="dark"] .jal-preset.is-current {
-        background: rgba(21, 205, 176, 0.20);
-    }
-
-    .jal-preset:active:not(:disabled) {
-        transform: scale(0.97);
-    }
-
-    .jal-preset:disabled {
-        opacity: 0.36;
-        cursor: not-allowed;
+        background: var(--jal-surface);
     }
 
     .jal-footer {
@@ -362,13 +359,13 @@
         flex: 0 0 10px;
         border-radius: 50%;
         background: var(--jal-muted);
-        box-shadow: 0 0 0 3px rgba(102, 113, 125, 0.14);
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--jal-muted) 22%, transparent);
     }
 
     .jal-run-status[data-status="up"] .jal-status-dot,
     .jal-run-status[data-status="open"] .jal-status-dot {
         background: var(--jal-accent);
-        box-shadow: 0 0 0 3px rgba(0, 191, 165, 0.18);
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--jal-accent) 18%, transparent);
     }
 
     .jal-run-status[data-status="down"] .jal-status-dot,
@@ -378,7 +375,7 @@
     }
 
     .jal-run-status[data-status="error"] .jal-status-dot {
-        background: var(--jal-danger);
+        background: #c93636;
         box-shadow: 0 0 0 3px rgba(201, 54, 54, 0.18);
     }
 
@@ -469,6 +466,13 @@
             overflow: auto;
         }
 
+        :root {
+            --jal-button-size: 62px;
+            --jal-graphic-width: 92px;
+            --jal-graphic-height: 170px;
+            --jal-slider-column-width: 58px;
+        }
+
         .jal-tile {
             height: auto;
             min-height: 100%;
@@ -480,7 +484,20 @@
         }
 
         .jal-panel {
-            min-height: 280px;
+            min-height: 286px;
+        }
+
+        .jal-control-layout {
+            grid-template-columns:
+                minmax(var(--jal-button-size), 0.78fr)
+                minmax(var(--jal-graphic-width), 1fr)
+                minmax(var(--jal-slider-column-width), 0.66fr);
+        }
+
+        .jal-round-stack,
+        .jal-graphic-wrap,
+        .jal-slider-column {
+            min-height: 222px;
         }
 
         .jal-footer {
@@ -494,26 +511,27 @@
     }
 
     @media (max-width: 410px) {
+        :root {
+            --jal-button-size: 58px;
+            --jal-graphic-width: 78px;
+            --jal-graphic-height: 155px;
+            --jal-slider-column-width: 52px;
+        }
+
         .jal-tile {
             padding: 7px;
         }
 
         .jal-panel {
-            padding: 9px;
+            padding: 9px 7px;
         }
 
-        .jal-slat-layout {
-            grid-template-columns: minmax(58px, 0.56fr) minmax(48px, 0.44fr) minmax(96px, 1fr);
-            gap: 6px;
+        .jal-control-layout {
+            gap: 5px;
         }
 
-        .jal-round-button {
-            width: 58px;
-        }
-
-        .jal-preset {
-            padding-inline: 5px;
-            font-size: 11px;
+        .jal-round-button span {
+            font-size: 9px;
         }
     }
 </style>
@@ -526,13 +544,13 @@
                 <span>Behang</span>
             </h2>
 
-            <div class="jal-blind-layout">
+            <div class="jal-control-layout">
                 <div class="jal-round-stack" role="group" aria-label="Behang bedienen">
                     <button class="jal-round-button jal-position-command" type="button" data-action="Position" data-value="0" title="Behang vollständig öffnen" aria-label="AUF">
                         <i class="fa-light fa-arrow-up"></i>
                         <span>AUF</span>
                     </button>
-                    <button id="jal-stop" class="jal-round-button is-stop" type="button" title="Fahrt stoppen" aria-label="STOP">
+                    <button id="jal-stop" class="jal-round-button" type="button" title="Fahrt stoppen" aria-label="STOP">
                         <i class="fa-light fa-square"></i>
                         <span>STOP</span>
                     </button>
@@ -540,6 +558,32 @@
                         <i class="fa-light fa-arrow-down"></i>
                         <span>ZU</span>
                     </button>
+                </div>
+
+                <div class="jal-graphic-wrap" aria-label="Grafische Behangposition">
+                    <div class="jal-device-graphic" aria-hidden="true">
+                        <div class="jal-graphic-head"></div>
+                        <div class="jal-blind-window">
+                            <i class="jal-blind-sun fa-light fa-sun-bright"></i>
+                            <div id="jal-blind-curtain" class="jal-blind-curtain">
+                                <div class="jal-blind-lines">
+                                    <div class="jal-blind-line"></div>
+                                    <div class="jal-blind-line"></div>
+                                    <div class="jal-blind-line"></div>
+                                    <div class="jal-blind-line"></div>
+                                    <div class="jal-blind-line"></div>
+                                    <div class="jal-blind-line"></div>
+                                    <div class="jal-blind-line"></div>
+                                    <div class="jal-blind-line"></div>
+                                    <div class="jal-blind-line"></div>
+                                    <div class="jal-blind-line"></div>
+                                    <div class="jal-blind-line"></div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="jal-graphic-foot"></div>
+                        <i class="jal-graphic-symbol fa-light fa-blinds"></i>
+                    </div>
                 </div>
 
                 <div class="jal-slider-column">
@@ -557,10 +601,25 @@
                 <span>Lamellen</span>
             </h2>
 
-            <div class="jal-slat-layout">
-                <div class="jal-slat-graphic-wrap" aria-label="Grafische Lamellenstellung">
-                    <div class="jal-slat-graphic" aria-hidden="true">
-                        <div class="jal-slat-head"></div>
+            <div class="jal-control-layout">
+                <div class="jal-round-stack" role="group" aria-label="Lamellen bedienen">
+                    <button class="jal-round-button jal-slat-command" type="button" data-action="Drehgrad" data-value="0" title="Lamellen in AUF-Richtung" aria-label="Lamellen AUF">
+                        <i class="fa-light fa-arrow-up"></i>
+                        <span>AUF</span>
+                    </button>
+                    <button class="jal-round-button jal-slat-command" type="button" data-action="Drehgrad" data-value="50" title="Lamellen Mittelstellung" aria-label="Lamellen MITTE">
+                        <i class="fa-light fa-equals"></i>
+                        <span>MITTE</span>
+                    </button>
+                    <button class="jal-round-button jal-slat-command" type="button" data-action="Drehgrad" data-value="100" title="Lamellen in ZU-Richtung" aria-label="Lamellen ZU">
+                        <i class="fa-light fa-arrow-down"></i>
+                        <span>ZU</span>
+                    </button>
+                </div>
+
+                <div class="jal-graphic-wrap" aria-label="Grafische Lamellenstellung">
+                    <div class="jal-device-graphic" aria-hidden="true">
+                        <div class="jal-graphic-head"></div>
                         <div class="jal-slat-field">
                             <div class="jal-slat-line"></div>
                             <div class="jal-slat-line"></div>
@@ -572,22 +631,16 @@
                             <div class="jal-slat-line"></div>
                             <div class="jal-slat-line"></div>
                         </div>
-                        <div class="jal-slat-foot"></div>
-                        <i class="jal-slat-symbol fa-light fa-blinds"></i>
+                        <div class="jal-graphic-foot"></div>
+                        <i class="jal-graphic-symbol fa-light fa-blinds"></i>
                     </div>
                 </div>
 
                 <div class="jal-slider-column">
-                    <span class="jal-end-label"><i class="fa-light fa-rotate-left"></i> AUF</span>
+                    <span class="jal-end-label"><i class="fa-light fa-arrow-up"></i> AUF</span>
                     <input id="jal-rotation" class="jal-slider" type="range" min="0" max="100" step="1" value="0" aria-label="Lamellenstellung">
-                    <span class="jal-end-label"><i class="fa-light fa-rotate-right"></i> ZU</span>
+                    <span class="jal-end-label"><i class="fa-light fa-arrow-down"></i> ZU</span>
                     <span id="jal-rotation-value" class="jal-value">0 %</span>
-                </div>
-
-                <div class="jal-presets" role="group" aria-label="Lamellen-Schnellwahl">
-                    <button class="jal-preset" type="button" data-action="Drehgrad" data-value="0"><i class="fa-light fa-rotate-left"></i> AUF&nbsp; 0%</button>
-                    <button class="jal-preset" type="button" data-action="Drehgrad" data-value="50"><i class="fa-light fa-grip-lines"></i> MITTE&nbsp; 50%</button>
-                    <button class="jal-preset" type="button" data-action="Drehgrad" data-value="100"><i class="fa-light fa-rotate-right"></i> ZU&nbsp; 100%</button>
                 </div>
             </div>
         </section>
@@ -621,6 +674,10 @@
         shakeFree: false,
         driveState: 0,
         phase: 0,
+        orderType: 0,
+        targetPosition: 0,
+        targetRotation: 0,
+        commandActive: false,
         referenced: false,
         active: false,
         controlsEnabled: false,
@@ -631,83 +688,11 @@
         errorText: ''
     };
 
+    let jalPendingCommand = null;
+
     const byId = (id) => document.getElementById(id);
     const clamp = (value) => Math.max(0, Math.min(100, Number(value) || 0));
     const formatPercent = (value) => `${Math.round(clamp(value))} %`;
-
-    function parseRgb(color) {
-        if (typeof color !== 'string') {
-            return null;
-        }
-        const match = color.match(/rgba?\(\s*([\d.]+)[,\s]+([\d.]+)[,\s]+([\d.]+)(?:\s*[,/]\s*([\d.]+))?\s*\)/i);
-        if (!match) {
-            return null;
-        }
-        return {
-            r: Number(match[1]),
-            g: Number(match[2]),
-            b: Number(match[3]),
-            a: match[4] === undefined ? 1 : Number(match[4])
-        };
-    }
-
-    function colorLuminance(rgb) {
-        const channels = [rgb.r, rgb.g, rgb.b].map((value) => {
-            const normalized = Math.max(0, Math.min(255, value)) / 255;
-            return normalized <= 0.03928
-                ? normalized / 12.92
-                : Math.pow((normalized + 0.055) / 1.055, 2.4);
-        });
-        return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
-    }
-
-    function findSymconBackground() {
-        try {
-            const candidates = [];
-            let current = window.frameElement;
-            for (let depth = 0; current && depth < 7; depth += 1) {
-                candidates.push(current);
-                current = current.parentElement;
-            }
-            if (window.parent && window.parent !== window) {
-                candidates.push(window.parent.document.body, window.parent.document.documentElement);
-            }
-            for (const element of candidates) {
-                if (!element) {
-                    continue;
-                }
-                const rgb = parseRgb(window.parent.getComputedStyle(element).backgroundColor);
-                if (rgb && rgb.a > 0.05) {
-                    return rgb;
-                }
-            }
-        } catch (error) {
-            // Die Kachel bleibt bei nicht zugänglichem Parent bewusst im hellen Fallback.
-        }
-        return null;
-    }
-
-    function syncSymconTheme() {
-        const background = findSymconBackground();
-        const dark = background !== null && colorLuminance(background) < 0.42;
-        document.documentElement.dataset.jalTheme = dark ? 'dark' : 'light';
-    }
-
-    function observeSymconTheme() {
-        syncSymconTheme();
-        try {
-            if (window.parent && window.parent !== window) {
-                const observer = new MutationObserver(syncSymconTheme);
-                observer.observe(window.parent.document.documentElement, {
-                    attributes: true,
-                    attributeFilter: ['class', 'style', 'data-theme']
-                });
-            }
-        } catch (error) {
-            // Keine Parent-Beobachtung möglich; heller Fallback bleibt aktiv.
-        }
-        window.setInterval(syncSymconTheme, 3000);
-    }
 
     function handleMessage(data) {
         try {
@@ -716,6 +701,16 @@
                 return;
             }
             jalState = {...jalState, ...decoded};
+
+            // Sobald der Server den Auftrag übernommen hat, ist der lokale
+            // Sofortindikator nicht mehr erforderlich. Nach Auftragsende
+            // (commandActive=false) wird der Kranz ebenfalls sicher entfernt.
+            if (Boolean(jalState.commandActive)) {
+                jalPendingCommand = null;
+            } else if (jalPendingCommand && Date.now() - jalPendingCommand.time > 650) {
+                jalPendingCommand = null;
+            }
+
             renderJalousie();
         } catch (error) {
             showLocalWarning(`Visualisierungsdaten ungültig: ${error.message}`);
@@ -727,9 +722,19 @@
             showLocalWarning('Die Modulkonfiguration ist nicht freigegeben.');
             return;
         }
+
+        jalPendingCommand = {
+            ident,
+            value: Number.isFinite(Number(value)) ? Number(value) : value,
+            time: Date.now()
+        };
+        renderCommandFeedback();
+
         try {
             requestAction(ident, value);
         } catch (error) {
+            jalPendingCommand = null;
+            renderCommandFeedback();
             showLocalWarning(`Aktion konnte nicht gesendet werden: ${error.message}`);
         }
     }
@@ -742,11 +747,54 @@
         window.setTimeout(() => tile.classList.remove('has-warning'), 5000);
     }
 
-    function markButtons(selector, value) {
+    function clearCommandFeedback() {
+        document.querySelectorAll('.jal-round-button.is-current').forEach((button) => {
+            button.classList.remove('is-current');
+        });
+    }
+
+    function setMatchingButtonCurrent(selector, value) {
         document.querySelectorAll(selector).forEach((button) => {
             const buttonValue = Number(button.dataset.value);
             button.classList.toggle('is-current', Math.abs(buttonValue - Number(value)) < 0.6);
         });
+    }
+
+    function renderCommandFeedback() {
+        clearCommandFeedback();
+
+        if (jalPendingCommand) {
+            if (jalPendingCommand.ident === 'Position') {
+                setMatchingButtonCurrent('.jal-position-command', jalPendingCommand.value);
+            } else if (jalPendingCommand.ident === 'Drehgrad') {
+                setMatchingButtonCurrent('.jal-slat-command', jalPendingCommand.value);
+            } else if (jalPendingCommand.ident === 'Stop') {
+                byId('jal-stop').classList.add('is-current');
+            }
+            return;
+        }
+
+        if (!Boolean(jalState.commandActive)) {
+            return;
+        }
+
+        const orderType = Number(jalState.orderType) || 0;
+        const phase = Number(jalState.phase) || 0;
+
+        // Auftragstyp 1 = Behang, 4 = Referenzfahrt.
+        if (orderType === 1 || orderType === 4) {
+            setMatchingButtonCurrent('.jal-position-command', jalState.targetPosition);
+        }
+
+        // Auftragstyp 2 = Lamellenfahrt.
+        if (orderType === 2) {
+            setMatchingButtonCurrent('.jal-slat-command', jalState.targetRotation);
+        }
+
+        // Phase 5 = bestätigter Stoppablauf.
+        if (phase === 5) {
+            byId('jal-stop').classList.add('is-current');
+        }
     }
 
     function renderJalousie() {
@@ -770,13 +818,12 @@
         document.querySelectorAll('.jal-position-command').forEach((button) => {
             button.disabled = !controlsEnabled;
         });
-        document.querySelectorAll('.jal-preset[data-action="Drehgrad"]').forEach((button) => {
+        document.querySelectorAll('.jal-slat-command').forEach((button) => {
             button.disabled = !intermediateAllowed;
         });
-        markButtons('.jal-position-command', position);
-        markButtons('.jal-preset[data-action="Drehgrad"]', rotation);
-
         byId('jal-stop').disabled = !Boolean(jalState.stopEnabled);
+
+        renderCommandFeedback();
 
         const shakeSwitch = byId('jal-shakefree');
         shakeSwitch.checked = Boolean(jalState.shakeFree);
@@ -792,7 +839,10 @@
         runStatus.dataset.status = statusKey;
         byId('jal-run-status-text').textContent = `Laufstatus: ${statusText}${statusSuffix}`;
 
-        // 0 % = Lamellen offen/AUF, 100 % = Lamellen geschlossen/ZU.
+        // Grafische Behangposition: 0 % oben/offen, 100 % unten/geschlossen.
+        byId('jal-blind-curtain').style.height = `${position}%`;
+
+        // Grafische Lamellenstellung: 0 % AUF, 100 % ZU.
         const slatAngle = -55 + rotation * 1.1;
         document.querySelectorAll('.jal-slat-line').forEach((line) => {
             line.style.transform = `rotate(${slatAngle}deg)`;
@@ -849,6 +899,5 @@
         sendJalousieAction('ShakeFree', Boolean(event.target.checked));
     });
 
-    observeSymconTheme();
     renderJalousie();
 </script>

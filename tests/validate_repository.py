@@ -90,6 +90,10 @@ def check_metadata() -> None:
     library = json.loads((ROOT / 'library.json').read_text(encoding='utf-8'))
     if library.get('compatibility', {}).get('version') != '9.0':
         ERRORS.append('library.json: compatibility.version must be 9.0')
+    module_php = (ROOT / 'LCNJalousie' / 'module.php').read_text(encoding='utf-8')
+    expected_version = str(library.get('version', ''))
+    if f"private const VERSION = '{expected_version}';" not in module_php:
+        ERRORS.append('LCNJalousie/module.php: VERSION constant must match library.json')
     module_ids: set[str] = set()
     for path in [ROOT / 'LCNJalousie' / 'module.json', ROOT / 'LCNJalousieKonfigurator' / 'module.json']:
         data = json.loads(path.read_text(encoding='utf-8'))
@@ -224,6 +228,10 @@ def check_custom_html_tile() -> None:
         'private function getVisualizationStateJson(): string',
         "'statusText' => $statusText",
         "'intermediateAllowed' => $intermediateAllowed",
+        "'orderType' => $orderType",
+        "'targetPosition' => round",
+        "'targetRotation' => round",
+        "'commandActive' => $commandActive",
         "$statusText = 'Geöffnet 100%'",
         "$statusText = 'Geschlossen 100%'",
     ]
@@ -248,10 +256,16 @@ def check_custom_html_tile() -> None:
         'id="jal-stop"',
         'id="jal-shakefree"',
         'id="jal-run-status-text"',
-        'class="jal-slat-graphic"',
-        'function syncSymconTheme()',
-        'findSymconBackground()',
-        'document.documentElement.dataset.jalTheme',
+        'class="jal-control-layout"',
+        'id="jal-blind-curtain"',
+        'class="jal-round-button jal-slat-command"',
+        'class="jal-graphic-wrap"',
+        'var(--accent-color',
+        'var(--content-color',
+        'var(--card-color',
+        'function renderCommandFeedback()',
+        "orderType: 0",
+        "commandActive: false",
         'Laufstatus: GESTOPPT',
     ]
     for pattern in required_html:
@@ -265,6 +279,13 @@ def check_custom_html_tile() -> None:
         'class="jal-status-panel"',
         'data-action="Position" data-value="50"',
         '@media (prefers-color-scheme: dark)',
+        'findSymconBackground()',
+        'syncSymconTheme()',
+        'observeSymconTheme()',
+        'window.parent.getComputedStyle',
+        'data-jal-theme',
+        'class="jal-presets"',
+        'class="jal-preset"',
     ]
     for pattern in forbidden_html:
         if pattern in html:

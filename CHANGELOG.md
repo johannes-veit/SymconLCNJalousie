@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.11 – 2026-08-04
+
+- Behang- und Lamellenkachel auf ein identisches, fluchtendes Dreispalten-Layout umgestellt: runde Tasten links, dynamische Grafik mittig, vertikaler Slider rechts.
+- Grafische Behangposition ergänzt; 0 % zeigt den geöffneten, 100 % den vollständig geschlossenen Behang.
+- Lamellen-Schnellwahl auf drei gleich große runde Tasten `AUF`, `MITTE`, `ZU` mit Pfeil-/Gleichheits-Symbolen umgestellt.
+- Beide Slider und beide Grafiken verwenden identische Größen, insbesondere bei untereinander angeordneten Smartphone-Kacheln.
+- Alle Bedienknöpfe verwenden weiterhin die Symcon-Akzentfarbe in Grün/Türkis.
+- Befehls-Kranz korrigiert: Er zeigt nur den aktuell laufenden beziehungsweise gerade angeforderten Auftrag und wird nach Abschluss automatisch entfernt.
+- Der Modulzustand liefert dafür Auftragstyp und Zielwerte an die HTML-Kachel.
+- Theme-Hotfix aus 0.1.10 übernommen: Farben stammen ausschließlich aus `--accent-color`, `--content-color` und `--card-color` der Symcon-Visualisierung.
+- Interne Modulversionskonstante auf 0.1.11 angehoben und automatische Versionskonsistenzprüfung ergänzt.
+
+## 0.1.10 – 2026-08-04
+
+- Theme-Umschaltung der HTML-Kachel korrigiert: Die Kachel nutzt nun direkt die von Symcon bereitgestellten CSS-Variablen `--accent-color`, `--content-color` und `--card-color`.
+- Fehlerhafte Helligkeits-Heuristik über Parent-Frame-Hintergründe entfernt; dadurch kann die Desktop-Visualisierung nicht mehr versehentlich als dunkel erkannt werden, obwohl die Symcon-Visualisierung auf hell steht.
+- Betriebssystem- und Browser-Dark-Mode haben keinen eigenen Einfluss mehr; maßgeblich ist ausschließlich das Theme der jeweils geöffneten Symcon-Visualisierung.
+
 ## 0.1.9 – 2026-08-04
 
 - HTML-SDK-Fehler behoben: SVG-Elemente werden nicht mehr über die nur lesbare Eigenschaft `className` verändert.

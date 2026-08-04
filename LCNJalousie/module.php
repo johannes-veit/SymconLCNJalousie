@@ -11,7 +11,7 @@ declare(strict_types=1);
  */
 class LCNJalousie extends IPSModuleStrict
 {
-    private const VERSION = '0.1.9';
+    private const VERSION = '0.1.11';
     private const EXECUTE_PARENT_ACTION = '{7938A5A2-0981-5FE0-BE6C-8AA610D654EB}';
 
     private const STATUS_ACTIVE = 102;
@@ -399,6 +399,9 @@ class LCNJalousie extends IPSModuleStrict
         $rotation = 0.0;
         $driveState = 0;
         $phase = 0;
+        $orderType = 0;
+        $targetPosition = 0.0;
+        $targetRotation = 0.0;
         $referenced = false;
         $shakeFree = false;
         $errorText = '';
@@ -440,6 +443,23 @@ class LCNJalousie extends IPSModuleStrict
             }
         }
 
+        $internalCategoryID = @IPS_GetObjectIDByIdent('05_Intern', $this->InstanceID);
+        if ($internalCategoryID !== false) {
+            $orderTypeID = @IPS_GetObjectIDByIdent('Auftragstyp', (int) $internalCategoryID);
+            $targetPositionID = @IPS_GetObjectIDByIdent('Ziel_Behang', (int) $internalCategoryID);
+            $targetRotationID = @IPS_GetObjectIDByIdent('Ziel_Lamelle', (int) $internalCategoryID);
+
+            if ($orderTypeID !== false && IPS_VariableExists((int) $orderTypeID)) {
+                $orderType = (int) GetValueInteger((int) $orderTypeID);
+            }
+            if ($targetPositionID !== false && IPS_VariableExists((int) $targetPositionID)) {
+                $targetPosition = (float) GetValueFloat((int) $targetPositionID);
+            }
+            if ($targetRotationID !== false && IPS_VariableExists((int) $targetRotationID)) {
+                $targetRotation = (float) GetValueFloat((int) $targetRotationID);
+            }
+        }
+
         $position = max(0.0, min(100.0, $position));
         $rotation = max(0.0, min(100.0, $rotation));
         $active = $this->GetStatus() === self::STATUS_ACTIVE;
@@ -447,6 +467,7 @@ class LCNJalousie extends IPSModuleStrict
         $positionTolerance = max(0.1, $this->ReadPropertyFloat('PositionTolerance'));
         $intermediateAllowed = $controlsEnabled && ($referenced || $this->ReadPropertyBoolean('AllowUnreferenced'));
         $moving = in_array($driveState, [1, 2], true);
+        $commandActive = in_array($phase, [1, 2, 3, 4, 5, 8], true);
         $stopEnabled = $active
             && ($moving || in_array($phase, [1, 2, 3, 4, 8], true));
 
@@ -483,6 +504,10 @@ class LCNJalousie extends IPSModuleStrict
             'shakeFree' => $shakeFree,
             'driveState' => $driveState,
             'phase' => $phase,
+            'orderType' => $orderType,
+            'targetPosition' => round(max(0.0, min(100.0, $targetPosition)), 1),
+            'targetRotation' => round(max(0.0, min(100.0, $targetRotation)), 1),
+            'commandActive' => $commandActive,
             'referenced' => $referenced,
             'active' => $active,
             'controlsEnabled' => $controlsEnabled,
