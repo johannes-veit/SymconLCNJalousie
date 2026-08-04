@@ -22,18 +22,31 @@ def check_required() -> None:
         'library.json',
         'README.md',
         'LICENSE',
-        'modules/LCNJalousie/module.json',
-        'modules/LCNJalousie/module.php',
-        'modules/LCNJalousie/scripts/Controller.php',
-        'modules/LCNJalousie/scripts/Worker.php',
-        'modules/LCNJalousie/scripts/Healthcheck.php',
-        'modules/LCNJalousie/scripts/Diagnose.php',
-        'modules/LCNJalousieConfigurator/module.json',
-        'modules/LCNJalousieConfigurator/module.php',
+        'LCNJalousie/module.json',
+        'LCNJalousie/module.php',
+        'LCNJalousie/scripts/Controller.php',
+        'LCNJalousie/scripts/Worker.php',
+        'LCNJalousie/scripts/Healthcheck.php',
+        'LCNJalousie/scripts/Diagnose.php',
+        'LCNJalousieConfigurator/module.json',
+        'LCNJalousieConfigurator/module.php',
     ]
     for rel in required:
         if not (ROOT / rel).is_file():
             ERRORS.append(f'missing file: {rel}')
+
+
+def check_root_structure() -> None:
+    allowed_without_module = {'docs', 'imgs', 'libs', 'tests', 'actions'}
+    for path in ROOT.iterdir():
+        if not path.is_dir() or path.name.startswith('.'):
+            continue
+        if path.name in allowed_without_module:
+            continue
+        if not (path / 'module.json').is_file():
+            ERRORS.append(
+                f'{path.name}: root directory is treated as a Symcon module, but module.json is missing'
+            )
 
 
 def check_php() -> None:
@@ -53,7 +66,7 @@ def check_metadata() -> None:
     if library.get('compatibility', {}).get('version') != '9.0':
         ERRORS.append('library.json: compatibility.version must be 9.0')
     module_ids: set[str] = set()
-    for path in ROOT.glob('modules/*/module.json'):
+    for path in [ROOT / 'LCNJalousie' / 'module.json', ROOT / 'LCNJalousieConfigurator' / 'module.json']:
         data = json.loads(path.read_text(encoding='utf-8'))
         module_id = data.get('id', '')
         if module_id in module_ids:
@@ -65,6 +78,7 @@ def check_metadata() -> None:
 
 def main() -> int:
     check_required()
+    check_root_structure()
     for path in ROOT.rglob('*.json'):
         check_json(path)
     check_metadata()

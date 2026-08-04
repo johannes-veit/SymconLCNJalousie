@@ -15,12 +15,12 @@ Diese Anleitung führt Sie ohne Git-Vorkenntnisse vom vorbereiteten Ordner bis z
 9. Klicken Sie auf **Create repository**.
 10. Öffnen Sie in GitHub Desktop **Repository → Show in Explorer**.
 11. Öffnen Sie zusätzlich den entpackten vorbereiteten Ordner.
-12. Kopieren Sie **den gesamten Inhalt** des vorbereiteten Ordners in den von GitHub Desktop erzeugten Repository-Ordner. Kopieren Sie nicht noch einmal den äußeren Ordner, sondern dessen Inhalt: `library.json`, `README.md`, `modules`, `docs` usw.
+12. Kopieren Sie **den gesamten Inhalt** des vorbereiteten Ordners in den von GitHub Desktop erzeugten Repository-Ordner. Kopieren Sie nicht noch einmal den äußeren Ordner, sondern dessen Inhalt: `library.json`, `README.md`, `LCNJalousie`, `LCNJalousieConfigurator`, `docs` usw.
 13. Wechseln Sie zurück zu GitHub Desktop. Links müssen nun viele neue Dateien unter **Changes** erscheinen.
 
 ## B. Ersten Stand speichern und öffentlich veröffentlichen
 
-1. Unten links bei **Summary** tragen Sie ein: `Initial release 0.1.0`.
+1. Unten links bei **Summary** tragen Sie ein: `Initial release 0.1.1`.
 2. Klicken Sie auf **Commit to main**.
 3. Klicken Sie oben auf **Publish repository**.
 4. Kontrollieren Sie den Namen `SymconLCNJalousie`.
@@ -29,6 +29,10 @@ Diese Anleitung führt Sie ohne Git-Vorkenntnisse vom vorbereiteten Ordner bis z
 7. Klicken Sie auf **Publish repository**.
 8. Wählen Sie anschließend **Repository → View on GitHub**.
 9. Prüfen Sie im Browser, ob neben dem Repository-Namen **Public** steht.
+
+## Fehlerbehebung: „module.json fehlt“
+
+Wenn Symcon meldet, der Ordner `modules` sei ein ungültiges Modul, liegen die Modulordner eine Ebene zu tief. Im Hauptverzeichnis des Repositorys müssen `LCNJalousie` und `LCNJalousieConfigurator` direkt neben `library.json` liegen. Ein Sammelordner `modules` ist in einer Symcon-Modulbibliothek nicht zulässig.
 
 ## C. Modul in Symcon installieren
 
