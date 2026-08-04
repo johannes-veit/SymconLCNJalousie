@@ -1,7 +1,7 @@
 <?php
 /**
  * Jalousiesteuerung LCN / IP-Symcon 9.0
- * V11.5 - Zentraler PHP-Controller
+ * V11.6 - Zentraler PHP-Controller
  *
  * Freigabestand fuer Symcon 9.0 / PHP 8.5.
  *
@@ -155,9 +155,7 @@ try {
             break;
 
         case 'HEALTHCHECK':
-            if (GetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase')) !== J_PHASE_SYNC) {
-                J_ReconcileRelayState($rootID);
-            }
+            J_RunHealthcheck($rootID);
             break;
 
         case 'STATUS':
@@ -253,6 +251,38 @@ function J_EnsureRuntimeEpoch(int $rootID, string $action): bool
 function J_Clamp(float $value, float $min = 0.0, float $max = 100.0): float
 {
     return max($min, min($max, $value));
+}
+
+function J_SetReference(int $rootID, float $position, float $slat, string $reason): void
+{
+    $position = $position < 50.0 ? 0.0 : 100.0;
+    $slat = $position <= 0.0 ? 0.0 : 100.0;
+    SetValueFloat(J_ID($rootID, '04_Istwerte', 'Ist_Behang'), $position);
+    SetValueFloat(J_ID($rootID, '04_Istwerte', 'Ist_Lamelle'), $slat);
+    SetValueBoolean(J_ID($rootID, '04_Istwerte', 'Position_Referenziert'), true);
+    $endID = J_ID($rootID, '04_Istwerte', 'Referenz_Endlage');
+    SetValueInteger($endID, $position <= 0.0 ? 1 : 2);
+    SetValueInteger(J_ID($rootID, '04_Istwerte', 'Letzte_Referenzierung'), time());
+    if (IPS_FunctionExists('LCNJAL_StoreReference')) {
+        LCNJAL_StoreReference($rootID, $position, $slat, $reason);
+    }
+}
+
+function J_InvalidateReference(int $rootID, string $reason): void
+{
+    SetValueBoolean(J_ID($rootID, '04_Istwerte', 'Position_Referenziert'), false);
+    SetValueInteger(J_ID($rootID, '04_Istwerte', 'Referenz_Endlage'), 0);
+    SetValueInteger(J_ID($rootID, '04_Istwerte', 'Letzte_Referenzierung'), 0);
+    if (IPS_FunctionExists('LCNJAL_InvalidateReference')) {
+        LCNJAL_InvalidateReference($rootID, $reason);
+    }
+}
+
+function J_MarkRelaysOff(int $rootID): void
+{
+    if (J_RelayState($rootID) === J_DIR_NONE) {
+        SetValueInteger(J_ID($rootID, '04_Istwerte', 'Letzte_Relais_AUS_Bestaetigung'), time());
+    }
 }
 
 function J_ConfigInt(int $rootID, string $ident): int
@@ -559,6 +589,15 @@ function J_DirectionalBlindTravelMs(int $rootID, int $direction): float
     return $blindTravelMs;
 }
 
+function J_ReferenceDurationMs(int $rootID, int $direction): int
+{
+    $totalMs = $direction === J_DIR_UP
+        ? J_ConfigInt($rootID, 'Gesamtlaufzeit_ms')
+        : J_ConfigInt($rootID, 'Behanglaufzeit_ms');
+    $duration = $totalMs + J_ConfigInt($rootID, 'Referenzreserve_ms');
+    return min($duration, J_ConfigInt($rootID, 'MaxFahrt_ms'));
+}
+
 function J_BlindDurationMs(int $rootID, float $startBlind, float $targetBlind, float $startSlat, int $direction, bool $withReserve): int
 {
     $blindTravelMs = J_DirectionalBlindTravelMs($rootID, $direction);
@@ -674,7 +713,7 @@ function J_StartBlindNow(int $rootID, float $target, bool $explicitReference): v
     // Endlagen bestimmen die Richtung immer eindeutig. Das ist insbesondere
     // wichtig, wenn Ist_Behang bereits exakt 0 % ist: ein Vergleich mit <
     // wuerde sonst faelschlich AB waehlen. Endlagenbefehle dienen zugleich als
-    // kurze Nachreferenzierung mit Reserve; explizite Referenzfahrten nutzen MaxFahrt.
+    // Nachreferenzierung mit Reserve. Unbekannte Positionen nutzen die richtungsspezifische Gesamtzeit plus Referenzreserve; MaxFahrt bleibt nur die obere Sicherheitsgrenze.
     if ($target <= 0.0) {
         $direction = J_DIR_UP;
     } elseif ($target >= 100.0) {
@@ -687,6 +726,7 @@ function J_StartBlindNow(int $rootID, float $target, bool $explicitReference): v
     SetValueInteger(J_ID($rootID, '03_Bedienung', 'Soll_Lamelle'), $targetSlat);
     SetValueInteger(J_ID($rootID, '05_Intern', 'Folge_Lamelle'), -1);
     SetValueInteger(J_ID($rootID, '05_Intern', 'Folge_Richtung'), J_DIR_NONE);
+    SetValueBoolean(J_ID($rootID, '05_Intern', 'Shake_Nachlauf_Aktiv'), false);
 
     $hardEnd = $target <= 0.0 || $target >= 100.0;
     $positionReferenced = GetValueBoolean(J_ID($rootID, '04_Istwerte', 'Position_Referenziert'));
@@ -695,7 +735,7 @@ function J_StartBlindNow(int $rootID, float $target, bool $explicitReference): v
     // der Initialwert 0 % bei einem AUF-Auftrag zu einer zu kurzen Fahrt fuehren.
     $referenceRun = $explicitReference || (!$positionReferenced && $hardEnd);
     $duration = $referenceRun
-        ? J_ConfigInt($rootID, 'MaxFahrt_ms')
+        ? J_ReferenceDurationMs($rootID, $direction)
         : J_BlindDurationMs($rootID, $actualBlind, $target, $actualSlat, $direction, $hardEnd);
 
     $order = J_NextOrder($rootID);
@@ -714,7 +754,7 @@ function J_StartBlindNow(int $rootID, float $target, bool $explicitReference): v
     SetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase'), J_PHASE_WAIT_START);
     SetValueBoolean(J_ID($rootID, '04_Istwerte', 'Automatik_Aktiv'), true);
     if ($hardEnd || $referenceRun) {
-        SetValueBoolean(J_ID($rootID, '04_Istwerte', 'Position_Referenziert'), false);
+        J_InvalidateReference($rootID, 'Endlagenfahrt gestartet; Referenz wird nach Ablauf der Reservezeit neu gesetzt');
     }
 
     $actionName = $explicitReference
@@ -729,6 +769,7 @@ function J_StartBlindNow(int $rootID, float $target, bool $explicitReference): v
 
 function J_RequestSlat(int $rootID, int $target, int $forcedDirection): void
 {
+    SetValueBoolean(J_ID($rootID, '05_Intern', 'Shake_Nachlauf_Aktiv'), false);
     $target = (int) round(J_Clamp((float) $target));
     SetValueInteger(J_ID($rootID, '03_Bedienung', 'Soll_Lamelle'), $target);
 
@@ -1129,6 +1170,7 @@ function J_HandleRealStart(int $rootID, int $direction, float $now): void
 
 function J_HandleRealStop(int $rootID, int $oldDirection): void
 {
+    J_MarkRelaysOff($rootID);
     $phase = GetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase'));
     $stopRequested = GetValueBoolean(J_ID($rootID, '05_Intern', 'Stop_Angefordert'));
 
@@ -1193,7 +1235,7 @@ function J_HandleRealStop(int $rootID, int $oldDirection): void
         SetValueFloat(J_ID($rootID, '04_Istwerte', 'Ist_Behang'), J_Clamp($targetBlind));
         SetValueFloat(J_ID($rootID, '04_Istwerte', 'Ist_Lamelle'), J_Clamp($targetSlat));
         if ($hardEnd) {
-            SetValueBoolean(J_ID($rootID, '04_Istwerte', 'Position_Referenziert'), true);
+            J_SetReference($rootID, $targetBlind, $targetSlat, 'Endlage nach Referenzreserve und bestätigtem Relais-STOP gespeichert');
         }
 
         J_StartConfiguredFollowSlatOrFinish($rootID);
@@ -1204,7 +1246,7 @@ function J_HandleRealStop(int $rootID, int $oldDirection): void
         SetValueFloat(J_ID($rootID, '04_Istwerte', 'Ist_Behang'), 100.0);
         SetValueFloat(J_ID($rootID, '04_Istwerte', 'Ist_Lamelle'), 100.0);
         if (GetValueBoolean(J_ID($rootID, '05_Intern', 'Endlage_Hart'))) {
-            SetValueBoolean(J_ID($rootID, '04_Istwerte', 'Position_Referenziert'), true);
+            J_SetReference($rootID, 100.0, 100.0, 'Endlage ZU nach Referenzreserve und Kalibrierfenster bestätigt');
         }
 
         $calibrationDeadline = GetValueFloat(J_ID($rootID, '05_Intern', 'Zielzeit_ms'));
@@ -1224,12 +1266,18 @@ function J_HandleRealStop(int $rootID, int $oldDirection): void
 
     if ($phase === J_PHASE_SLAT) {
         SetValueFloat(J_ID($rootID, '04_Istwerte', 'Ist_Lamelle'), J_Clamp($targetSlat));
-        J_FinishIdle($rootID, 'Lamellenziel erreicht');
+        $shakeRestore = GetValueBoolean(J_ID($rootID, '05_Intern', 'Shake_Nachlauf_Aktiv'));
+        SetValueBoolean(J_ID($rootID, '05_Intern', 'Shake_Nachlauf_Aktiv'), false);
+        J_FinishIdle($rootID, $shakeRestore
+            ? 'ShakeFree abgeschlossen; Lamellen-ZU-Befehl gestoppt und beide Relais AUS bestätigt'
+            : 'Lamellenziel erreicht');
         return;
     }
 
     if ($phase === J_PHASE_SHAKE) {
         SetValueFloat(J_ID($rootID, '04_Istwerte', 'Ist_Lamelle'), 0.0);
+        SetValueBoolean(J_ID($rootID, '05_Intern', 'Shake_Nachlauf_Aktiv'), true);
+        J_SetLastAction($rootID, 'ShakeFree-AUF gestoppt; Lamellen-ZU-Nachlauf wird überwacht');
         J_StartConfiguredFollowSlatOrFinish($rootID);
         return;
     }
@@ -1250,7 +1298,11 @@ function J_StartConfiguredFollowSlatOrFinish(int $rootID): void
 
     $actual = GetValueFloat(J_ID($rootID, '04_Istwerte', 'Ist_Lamelle'));
     if (abs($follow - $actual) <= J_ConfigFloat($rootID, 'Lamellentoleranz')) {
-        J_FinishIdle($rootID, 'Behangfahrt und Lamellenziel abgeschlossen');
+        $shakeRestore = GetValueBoolean(J_ID($rootID, '05_Intern', 'Shake_Nachlauf_Aktiv'));
+        SetValueBoolean(J_ID($rootID, '05_Intern', 'Shake_Nachlauf_Aktiv'), false);
+        J_FinishIdle($rootID, $shakeRestore
+            ? 'ShakeFree abgeschlossen; beide Relais AUS bestätigt'
+            : 'Behangfahrt und Lamellenziel abgeschlossen');
         return;
     }
     J_StartSlatNow($rootID, $follow, $followDir);
@@ -1274,6 +1326,7 @@ function J_StartShakeNow(int $rootID): void
         return;
     }
 
+    SetValueBoolean(J_ID($rootID, '05_Intern', 'Shake_Nachlauf_Aktiv'), false);
     $duration = J_ConfigInt($rootID, 'ShakeFree_ms');
     $order = J_NextOrder($rootID);
     J_ClearError($rootID);
@@ -1313,11 +1366,22 @@ function J_HandleDeadline(int $rootID, int $order): void
 
     J_UpdatePositionToNow($rootID);
 
+    $startDirection = GetValueInteger(J_ID($rootID, '05_Intern', 'Start_Richtung'));
+    $targetBlind = GetValueFloat(J_ID($rootID, '05_Intern', 'Ziel_Behang'));
+    $hardEnd = GetValueBoolean(J_ID($rootID, '05_Intern', 'Endlage_Hart'));
+    $tolerance = J_ConfigFloat($rootID, 'Positionstoleranz');
+
     if (in_array($phase, [J_PHASE_BLIND, J_PHASE_REFERENCE], true)
-        && GetValueInteger(J_ID($rootID, '05_Intern', 'Start_Richtung')) === J_DIR_DOWN
-        && GetValueFloat(J_ID($rootID, '05_Intern', 'Ziel_Behang')) >= 100.0 - J_ConfigFloat($rootID, 'Positionstoleranz')) {
-        SetValueFloat(J_ID($rootID, '04_Istwerte', 'Ist_Behang'), 100.0);
-        SetValueFloat(J_ID($rootID, '04_Istwerte', 'Ist_Lamelle'), 100.0);
+        && $hardEnd
+        && $startDirection === J_DIR_UP
+        && $targetBlind <= $tolerance) {
+        J_SetReference($rootID, 0.0, 0.0, 'Endlage AUF nach richtungsabhängiger Gesamtzeit plus Referenzreserve erreicht');
+    }
+
+    if (in_array($phase, [J_PHASE_BLIND, J_PHASE_REFERENCE], true)
+        && $startDirection === J_DIR_DOWN
+        && $targetBlind >= 100.0 - $tolerance) {
+        J_SetReference($rootID, 100.0, 100.0, 'Endlage ZU nach richtungsabhängiger Gesamtzeit plus Referenzreserve erreicht');
         SetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase'), J_PHASE_CALIBRATION);
         SetValueFloat(
             J_ID($rootID, '05_Intern', 'Zielzeit_ms'),
@@ -1452,11 +1516,19 @@ function J_ResetError(int $rootID): void
     SetValueInteger(J_ID($rootID, '04_Istwerte', 'Fahrstatus'), J_DIR_NONE);
     SetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase'), J_PHASE_IDLE);
     SetValueBoolean(J_ID($rootID, '04_Istwerte', 'Automatik_Aktiv'), false);
+    J_InvalidateReference($rootID, 'Fehler zurückgesetzt; erneute Endlagenreferenz erforderlich');
+    J_MarkRelaysOff($rootID);
     J_SetLastAction($rootID, 'Fehler quittiert; keine LCN-Taste gesendet');
 }
 
 function J_FinishIdle(int $rootID, string $reason): void
 {
+    $relayState = J_RelayState($rootID);
+    if ($relayState !== J_DIR_NONE) {
+        J_SetError($rootID, 'Ablaufabschluss verweigert: mindestens ein Motorrelais ist noch aktiv. Lokale LCN-Bedienung verwenden und Fehler quittieren.', false);
+        return;
+    }
+    J_MarkRelaysOff($rootID);
     J_SetWorker($rootID, false);
     SetValueInteger(J_ID($rootID, '05_Intern', 'Auftragstyp'), J_ORDER_NONE);
     SetValueInteger(J_ID($rootID, '05_Intern', 'Erwartete_Richtung'), J_DIR_NONE);
@@ -1468,6 +1540,7 @@ function J_FinishIdle(int $rootID, string $reason): void
     SetValueBoolean(J_ID($rootID, '05_Intern', 'Endlage_Hart'), false);
     SetValueBoolean(J_ID($rootID, '05_Intern', 'Abbruch_Wartet_Auf_Start'), false);
     SetValueBoolean(J_ID($rootID, '05_Intern', 'Abbruch_Fehlerphase'), false);
+    SetValueBoolean(J_ID($rootID, '05_Intern', 'Shake_Nachlauf_Aktiv'), false);
     SetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase'), J_PHASE_IDLE);
     SetValueBoolean(J_ID($rootID, '04_Istwerte', 'Automatik_Aktiv'), false);
     if (J_RelayState($rootID) === J_DIR_NONE) {
@@ -1494,7 +1567,8 @@ function J_SetError(int $rootID, string $message, bool $tryStop): void
     SetValueString(J_ID($rootID, '04_Istwerte', 'Fehlertext'), $message);
     SetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase'), J_PHASE_ERROR);
     SetValueBoolean(J_ID($rootID, '04_Istwerte', 'Automatik_Aktiv'), false);
-    SetValueBoolean(J_ID($rootID, '04_Istwerte', 'Position_Referenziert'), false);
+    J_InvalidateReference($rootID, 'Fehlerverriegelung: ' . $message);
+    SetValueBoolean(J_ID($rootID, '05_Intern', 'Shake_Nachlauf_Aktiv'), false);
     J_SetWorker($rootID, false);
     J_SetLastAction($rootID, 'FEHLER VERRIEGELT: ' . $message);
 
@@ -1530,7 +1604,10 @@ function J_BeginStatusSync(int $rootID, string $reason): void
     SetValueBoolean(J_ID($rootID, '05_Intern', 'Sync_Relais_AB_Empfangen'), false);
     SetValueInteger(J_ID($rootID, '05_Intern', 'Kernel_Startzeit'), J_KernelStart());
     SetValueString(J_ID($rootID, '04_Istwerte', 'Fehlertext'), '');
-    SetValueBoolean(J_ID($rootID, '04_Istwerte', 'Position_Referenziert'), false);
+    // Eine normale Initialisierung oder ein ApplyChanges darf eine gültige,
+    // persistent gespeicherte Referenz nicht löschen. Bei Kernelneustart,
+    // deaktiviertem Modul oder Fehler wird sie an den jeweiligen Sicherheitsstellen
+    // bewusst ungültig gemacht.
     SetValueBoolean(J_ID($rootID, '04_Istwerte', 'Automatik_Aktiv'), false);
     SetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase'), J_PHASE_SYNC);
 
@@ -1627,12 +1704,54 @@ function J_CompleteStatusSync(int $rootID, int $order): void
         return;
     }
 
-    J_FinishIdle($rootID, 'Statusabgleich abgeschlossen; Referenzfahrt erforderlich');
+    J_FinishIdle(
+        $rootID,
+        GetValueBoolean(J_ID($rootID, '04_Istwerte', 'Position_Referenziert'))
+            ? 'Statusabgleich abgeschlossen; gespeicherte Referenz bleibt gültig'
+            : 'Statusabgleich abgeschlossen; Referenzfahrt erforderlich'
+    );
 }
 
 function J_InitializeRuntime(int $rootID): void
 {
     J_BeginStatusSync($rootID, 'Initialisierung');
+}
+
+function J_RunHealthcheck(int $rootID): void
+{
+    $phase = GetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase'));
+    if ($phase !== J_PHASE_SYNC) {
+        J_ReconcileRelayState($rootID);
+    }
+
+    $phase = GetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase'));
+    $order = J_CurrentOrder($rootID);
+    $now = J_NowMs();
+
+    if (GetValueBoolean(J_ID($rootID, '05_Intern', 'Stop_Angefordert'))) {
+        $stopUntil = GetValueFloat(J_ID($rootID, '05_Intern', 'Stop_bis_ms'));
+        if ($stopUntil > 0.0 && $now >= $stopUntil) {
+            J_HandleStopTimeout($rootID, $order);
+        }
+        return;
+    }
+
+    if ($phase === J_PHASE_WAIT_START) {
+        $confirmUntil = GetValueFloat(J_ID($rootID, '05_Intern', 'Bestaetigung_bis_ms'));
+        if ($confirmUntil > 0.0 && $now >= $confirmUntil) {
+            J_HandleStartTimeout($rootID, $order);
+        }
+        return;
+    }
+
+    if (in_array($phase, [J_PHASE_BLIND, J_PHASE_SLAT, J_PHASE_SHAKE, J_PHASE_REFERENCE, J_PHASE_CALIBRATION], true)) {
+        $deadline = GetValueFloat(J_ID($rootID, '05_Intern', 'Zielzeit_ms'));
+        if ($deadline > 0.0 && $now >= $deadline) {
+            // Zweite, unabhängige Sicherung neben dem 1-s-Worker: Ist dessen
+            // Timer ausgefallen, löst der Healthcheck den einmaligen STOP aus.
+            J_HandleDeadline($rootID, $order);
+        }
+    }
 }
 
 function J_StatusText(int $rootID): string
@@ -1643,7 +1762,11 @@ function J_StatusText(int $rootID): string
     $lines[] = 'Phase: ' . GetValueFormatted(J_ID($rootID, '04_Istwerte', 'Phase'));
     $lines[] = 'Ist Behang: ' . GetValueFormatted(J_ID($rootID, '04_Istwerte', 'Ist_Behang'));
     $lines[] = 'Ist Lamelle: ' . GetValueFormatted(J_ID($rootID, '04_Istwerte', 'Ist_Lamelle'));
-    $lines[] = 'Referenziert: ' . (GetValueBoolean(J_ID($rootID, '04_Istwerte', 'Position_Referenziert')) ? 'JA' : 'NEIN');
+    $referenced = GetValueBoolean(J_ID($rootID, '04_Istwerte', 'Position_Referenziert'));
+    $lines[] = 'Referenziert: ' . ($referenced ? 'JA' : 'NEIN');
+    $lines[] = 'Referenz-Endlage: ' . GetValueFormatted(J_ID($rootID, '04_Istwerte', 'Referenz_Endlage'));
+    $lines[] = 'Letzte Referenzierung: ' . GetValueFormatted(J_ID($rootID, '04_Istwerte', 'Letzte_Referenzierung'));
+    $lines[] = 'Letzte Relais-AUS-Bestätigung: ' . GetValueFormatted(J_ID($rootID, '04_Istwerte', 'Letzte_Relais_AUS_Bestaetigung'));
     $lines[] = 'Auftragsnummer: ' . J_CurrentOrder($rootID);
     $lines[] = 'Kernelstart: ' . date('d.m.Y H:i:s', GetValueInteger(J_ID($rootID, '05_Intern', 'Kernel_Startzeit')));
     $lines[] = 'Fehler: ' . GetValueString(J_ID($rootID, '04_Istwerte', 'Fehlertext'));

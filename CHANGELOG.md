@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.15 – 2026-08-04
+
+- Kritischen Referenzverlust behoben: Der LCN-Statusabgleich und ein normales `ApplyChanges` setzen `Position referenziert` nicht mehr pauschal auf `false`.
+- Gültige Referenz zusätzlich persistent als Modulattribute gespeichert (`ReferenceValid`, Endlage, Lamelle, Zeitstempel und Grund). Sichtbare Statusvariable und Attribut werden beim Aufbau synchronisiert.
+- Neue Diagnosewerte `Letzte Referenz-Endlage`, `Letzte Referenzierung` und `Letzte Bestätigung: beide Relais AUS` ergänzt.
+- Endlagenreferenz wird bei 0 % AUF und 100 % ZU jeweils nach der richtungsspezifischen Gesamtzeit plus Referenzreserve gesetzt. Unreferenzierte Endlagenfahrten verwenden nicht mehr pauschal `MaxFahrt`, sondern die passende Richtungs-Gesamtzeit plus Reserve; `MaxFahrt` bleibt die obere Sicherheitsgrenze.
+- Bei 100 % ZU wird die Referenz vor dem zusätzlichen Kalibrierfenster gespeichert. Das Kalibrierfenster und ein eventuell anschließendes ShakeFree ändern die Referenz nicht, solange kein Fehler auftritt.
+- ShakeFree-Abschluss explizit überwacht: AUF-Gegenfahrt wird gestoppt, danach wird der Lamellen-ZU-Nachlauf gestartet und ebenfalls nach seiner berechneten Wendezeit gestoppt. Abschluss erst nach real bestätigtem Relais-AUS.
+- `J_FinishIdle()` verweigert den Ruhezustand, solange mindestens ein Motorrelais aktiv ist. Der Ablauf verriegelt dann fehlerhaft, statt einen stromführenden Zustand als beendet zu melden.
+- Healthcheck als zweite Deadline-/STOP-Sicherung erweitert und Vorgabewert für neue Instanzen auf 10 s gesetzt. Falls der 1-s-Worker ausfällt, löst der Healthcheck die fällige Deadline beziehungsweise den bestehenden STOP-Timeout aus.
+- Nach jedem bestätigten realen Fahrtende wird der Zeitpunkt der Relais-AUS-Bestätigung protokolliert.
+- Dokumentation zu getrennten Richtungszeiten, frei wählbaren simulierten UPU-Ausgängen, Kalibrierverzögerung und Relais-AUS-Sicherheit zusammengeführt.
+
 ## 0.1.14 – 2026-08-04
 
 - Bezeichnung in Modulmenü, Objektbaum und HTML-Kachel auf **ShakeFree nach Endlage ZU** präzisiert.

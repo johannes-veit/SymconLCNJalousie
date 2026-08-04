@@ -1,7 +1,7 @@
 <?php
 /**
  * Jalousiesteuerung LCN / IP-Symcon 9.0
- * V11.5 - Diagnose, Kompatibilitaets- und Installationspruefung
+ * V11.6 - Diagnose, Kompatibilitaets- und Installationspruefung
  *
  * Die Diagnose prueft die formale Symcon-/LCN-Konfiguration. Sie ersetzt
  * keine reale Inbetriebnahme mit Motor, Relaisrueckmeldung und LCN-Busmonitor.
@@ -177,10 +177,11 @@ $variableSchema = [
     ],
     '04_Istwerte' => [
         'Ist_Behang' => 2, 'Ist_Lamelle' => 2, 'Fahrstatus' => 1,
-        'Phase' => 1, 'Position_Referenziert' => 0, 'Automatik_Aktiv' => 0,
+        'Phase' => 1, 'Position_Referenziert' => 0, 'Referenz_Endlage' => 1,
+        'Letzte_Referenzierung' => 1, 'Automatik_Aktiv' => 0,
         'Fehlertext' => 3, 'Letzte_Aktion' => 3,
         'Letzte_Fahrtdauer_ms' => 1, 'Letzte_Statusmeldung' => 1,
-        'Fehler_Verriegelt' => 0,
+        'Letzte_Relais_AUS_Bestaetigung' => 1, 'Fehler_Verriegelt' => 0,
     ],
     '05_Intern' => [
         'Auftragsnummer' => 1, 'Auftragstyp' => 1, 'Erwartete_Richtung' => 1,
@@ -195,6 +196,7 @@ $variableSchema = [
         'Pending_Aktion' => 1, 'Pending_Wert' => 2, 'Pending_Richtung' => 1,
         'Worker_Aktiv' => 0, 'Kernel_Startzeit' => 1, 'Sync_bis_ms' => 2,
         'Sync_Relais_AUF_Empfangen' => 0, 'Sync_Relais_AB_Empfangen' => 0,
+        'Shake_Nachlauf_Aktiv' => 0,
     ],
 ];
 foreach ($variableSchema as $category => $variables) {
@@ -366,8 +368,8 @@ if ($errors === []) {
     foreach (['Controller' => $controllerID, 'Worker' => $workerID, 'Healthcheck' => $healthID, 'Diagnose' => $diagnoseID] as $name => $id) {
         if ($id === false || !IPS_ScriptExists((int) $id)) {
             JD_Add($errors, $name . '-Skript fehlt oder hat falschen Objekttyp.');
-        } elseif (strpos(IPS_GetScriptContent((int) $id), 'V11.4') === false) {
-            JD_Add($warnings, $name . '-Skript enthaelt keine V11.4-Kennung. Skriptstand pruefen.');
+        } elseif (strpos(IPS_GetScriptContent((int) $id), 'V11.6') === false) {
+            JD_Add($warnings, $name . '-Skript enthaelt keine V11.6-Kennung. Skriptstand pruefen.');
         }
     }
 
@@ -448,9 +450,14 @@ if ($errors === []) {
             'Sync_Relais_AB_Empfangen' => 'laufbezogene AB-Rueckmeldung',
             "case 'SYNC_COMPLETE':" => 'Statussync-Abschluss',
             "case 'RELAY_UPDATE':" => 'koaleszierte Relaisauswertung',
+            'function J_SetReference' => 'persistente Endlagenreferenz',
+            'function J_ReferenceDurationMs' => 'richtungsabhängige Gesamtzeit plus Referenzreserve',
+            'function J_RunHealthcheck' => 'unabhängige Deadline- und STOP-Überwachung',
+            'Ablaufabschluss verweigert' => 'Relais-AUS-Prüfung vor dem Stillstand',
+            'Shake_Nachlauf_Aktiv' => 'überwachter Lamellen-ZU-Nachlauf nach ShakeFree',
         ] as $needle => $description) {
             if (strpos($controllerContent, $needle) === false) {
-                JD_Add($errors, 'Controller enthaelt nicht die erwartete V11.4-Sicherheitsfunktion: ' . $description . '.');
+                JD_Add($errors, 'Controller enthaelt nicht die erwartete V11.6-Sicherheitsfunktion: ' . $description . '.');
             }
         }
     }
@@ -477,7 +484,7 @@ if ($errors === []) {
 }
 
 $out = [];
-$out[] = 'DIAGNOSE JALOUSIE V11.4 - SYMCON 9.0 / PHP 8.5';
+$out[] = 'DIAGNOSE JALOUSIE V11.6 - SYMCON 9.0 / PHP 8.5';
 $out[] = 'Objekt: ' . IPS_GetLocation($rootID) . ' (ID ' . $rootID . ')';
 $out[] = str_repeat('=', 84);
 $out[] = '';

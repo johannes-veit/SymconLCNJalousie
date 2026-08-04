@@ -1,7 +1,7 @@
 <?php
 /**
  * Jalousiesteuerung LCN / IP-Symcon 9.0
- * V11.5 - 1-s-Worker mit kurzer Millisekunden-Schlussphase
+ * V11.6 - 1-s-Worker mit kurzer Millisekunden-Schlussphase
  *
  * Der ScriptTimer wird vom Controller auf 1 Sekunde gesetzt. Lange Fahrten
  * werden nicht mit IPS_Sleep abgewartet. Nur im letzten Workerfenster wird

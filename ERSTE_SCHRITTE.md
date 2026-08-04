@@ -20,7 +20,7 @@ Diese Anleitung führt Sie ohne Git-Vorkenntnisse vom vorbereiteten Ordner bis z
 
 ## B. Ersten Stand speichern und öffentlich veröffentlichen
 
-1. Unten links bei **Summary** tragen Sie ein: `Update Symcon shutter tile 0.1.11`.
+1. Unten links bei **Summary** tragen Sie ein: `Initial release / update Symcon LCN Jalousie 0.1.15`.
 2. Klicken Sie auf **Commit to main**.
 3. Klicken Sie oben auf **Publish repository**.
 4. Kontrollieren Sie den Namen `SymconLCNJalousie`.
@@ -104,9 +104,9 @@ Arbeiten Sie die Bereiche von oben nach unten ab:
 Dieser Fehler betraf Version 0.1.2. In Version 0.1.3 wird die Initialkonfiguration des Konfigurators korrekt als JSON-Objekt `{}` ausgegeben. Nach dem Update in der Symcon-Modulverwaltung kann die Zeile „Neue LCN-Jalousie“ über „Alle erstellen“ angelegt werden.
 ## Kachel und erste Referenz
 
-Nach dem Update auf 0.1.11 die Jalousieinstanz einmal mit **Übernehmen** neu anwenden und die Kachel-Visualisierung mit `Strg + F5` neu laden. Die Instanz zeigt anschließend die korrigierte HTML-SDK-Kachel: Behang und Lamellen mit fluchtenden Dreispalten-Layouts aus runden Tasten, mittiger Grafik und rechtem Slider, ShakeFree nach Endlage ZU sowie dem kompakten Laufstatus. Der Instanzname wird von Symcon selbst dargestellt und innerhalb der Kachel nicht wiederholt.
+Nach der Installation beziehungsweise dem Update auf 0.1.15 die Jalousieinstanz einmal mit **Übernehmen** neu anwenden und die Kachel-Visualisierung mit `Strg + F5` neu laden. Die Instanz zeigt anschließend die korrigierte HTML-SDK-Kachel: Behang und Lamellen mit fluchtenden Dreispalten-Layouts aus runden Tasten, mittiger Grafik und rechtem Slider, ShakeFree nach Endlage ZU sowie dem kompakten Laufstatus. Der Instanzname wird von Symcon selbst dargestellt und innerhalb der Kachel nicht wiederholt.
 
-Solange `Position gültig` ausgeschaltet ist, sind 0 %/0 % nur Initialwerte und keine bestätigte reale Stellung. Führen Sie als ersten Abgleich im Modul eine **Referenzfahrt AUF** oder **Referenzfahrt AB** aus. Nach dem kontrollierten Fahrtende setzt das Modul 0 %/0 % beziehungsweise 100 %/100 % und schaltet `Position gültig` ein. Ist die Position noch unbekannt, behandelt das Modul den ersten Symcon-Endlagenauftrag auf 0 % oder 100 % automatisch als volle Referenzfahrt mit der maximal überwachten Fahrzeit. Die explizite Referenzfahrt ist für den Erstabgleich trotzdem am klarsten und bewusst auswählbar.
+Solange `Position gültig` ausgeschaltet ist, sind 0 %/0 % nur Initialwerte und keine bestätigte reale Stellung. Führen Sie als ersten Abgleich im Modul eine **Referenzfahrt AUF** oder **Referenzfahrt AB** aus. Nach dem kontrollierten Fahrtende setzt das Modul 0 %/0 % beziehungsweise 100 %/100 % und schaltet `Position gültig` ein. Ist die Position noch unbekannt, behandelt das Modul den ersten Symcon-Endlagenauftrag auf 0 % oder 100 % automatisch als volle Referenzfahrt mit der passenden richtungsabhängigen Gesamtzeit plus Referenzreserve. Die explizite Referenzfahrt ist für den Erstabgleich trotzdem am klarsten und bewusst auswählbar.
 
 
 
@@ -117,3 +117,13 @@ Solange `Position gültig` ausgeschaltet ist, sind 0 %/0 % nur Initialwerte und 
 - **ShakeFree nach Endlage ZU** erst nach einer vollständigen ZU-Fahrt ohne ShakeFree und einer erfolgreichen Prüfung dieser Zeitverzögerung aktivieren.
 - Prüfen Sie die getrennten Gesamtzeiten für AUF und ZU. Die AUF-Gesamtzeit enthält die vollständige Lamellenwendung.
 - Bei **Fehler verriegelt** greift Symcon nicht mehr ein. Bringen Sie die Jalousie lokal zum Stillstand, prüfen Sie beide Relais auf AUS und quittieren Sie erst danach.
+
+
+## Referenz und Relais-AUS ab Version 0.1.15
+
+- Eine bestätigte Referenz wird zusätzlich als persistentes Modulattribut gespeichert und bleibt bei normalem Übernehmen, Rebuild und Statusabgleich erhalten.
+- Bei direktem Update von 0.1.13 ist wegen der neuen getrennten Richtungszeiten einmalig eine neue Endlagenreferenz nötig.
+- 0 % AUF beziehungsweise 100 % ZU werden nach der jeweiligen Gesamtzeit plus Referenzreserve gesetzt.
+- Nach jeder automatischen Endlage wird der aktive Richtungsbefehl genau einmal gestoppt und beide realen Relais müssen AUS bestätigen.
+- Nach ShakeFree wird zusätzlich der Lamellen-ZU-Nachlauf nach der vollständigen Wendezeit gestoppt und ebenfalls auf beide Relais AUS geprüft.
+- Stellen Sie den Healthcheck für die unabhängige STOP-Überwachung auf 10 Sekunden.

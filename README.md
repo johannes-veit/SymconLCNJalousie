@@ -57,7 +57,7 @@ Eine ausführliche Anleitung steht in [ERSTE_SCHRITTE.md](ERSTE_SCHRITTE.md).
 
 ## Entwicklungsstand
 
-**0.1.14 – öffentliche Beta.** Der Runtime-Kern basiert auf der tiefengeprüften V11.3-Skriptfassung. Das Modul automatisiert deren Aufbau und Konfiguration. Vor einem produktiven Motorbetrieb bleiben reale Tests mit Symcon 9.0, PCHK/PCK, LCN-Bus, Relais, Motor und Endlagen zwingend.
+**0.1.15 – öffentliche Beta.** Der Runtime-Kern basiert auf der tiefengeprüften V11.3-Skriptfassung. Das Modul automatisiert deren Aufbau und Konfiguration. Vor einem produktiven Motorbetrieb bleiben reale Tests mit Symcon 9.0, PCHK/PCK, LCN-Bus, Relais, Motor und Endlagen zwingend.
 
 ## Lizenz
 
@@ -68,7 +68,9 @@ Ab Version 0.1.11 nutzt die Geräteinstanz das offizielle Symcon HTML-SDK für e
 
 Die direkten Statusvariablen `Position`, `Drehgrad` und `Position gültig` bleiben erhalten, damit die Werte auch in der Listenansicht und für Automationen verfügbar sind. `Position` verwendet 0 % = vollständig offen und 100 % = vollständig geschlossen; `Drehgrad` verwendet 0 % in AUF-Richtung und 100 % in AB-Richtung.
 
-Nach einem Neustart oder einer Neuinitialisierung ist die angezeigte Zahl zunächst nur der gespeicherte Rechenwert und `Position gültig` steht auf `false`. Ist `Position gültig` noch `false`, wird der erste Endlagenauftrag auf 0 % oder 100 % automatisch als volle Referenzfahrt ausgeführt: unabhängig vom gespeicherten Rechenwert läuft er mit der maximal überwachten Fahrzeit bis zur gewählten Endlage. Erst nach bestätigtem STOP setzt das Modul den Endwert und `Position gültig` auf `true`. Lokale/externe Fahrten werden verfolgt, setzen aber ohne eindeutig überwachten Symcon-Endlagenauftrag keine neue Referenz.
+Ab Version 0.1.15 wird eine gültige Endlagenreferenz doppelt persistent gespeichert: als sichtbare Statusvariable und zusätzlich als Modulattribut. Ein normales **Übernehmen**, ein Objektbaum-Rebuild oder eine erneute Statusabfrage löscht sie deshalb nicht mehr. Die Diagnosevariablen `Letzte Referenz-Endlage` und `Letzte Referenzierung` zeigen, wann 0 % AUF beziehungsweise 100 % ZU zuletzt sicher gesetzt wurden. Eine Referenz wird weiterhin bewusst verworfen, wenn das Bewegungsmodell geändert wird, die Symcon-Steuerung deaktiviert wird oder eine Fehlerverriegelung eintritt.
+
+Ist `Position gültig` noch `false`, wird der erste Endlagenauftrag auf 0 % oder 100 % automatisch als vollständige Referenzfahrt ausgeführt. Die Dauer ist jetzt richtungsspezifisch: Gesamtzeit 100→0 beziehungsweise 0→100 plus Referenzreserve, begrenzt durch `MaxFahrt`. Nach Ablauf der Reserve wird die entsprechende Endlage als Referenz gespeichert. Bei 100 % ZU läuft danach zusätzlich das konfigurierte Kalibrierfenster; bei 0 % AUF wird sofort der richtungsabhängige STOP ausgelöst. Lokale/externe Fahrten werden verfolgt, setzen aber ohne eindeutig überwachten Symcon-Endlagenauftrag keine neue Referenz.
 
 Der STOP-Taster der Kachel ist kein separater LCN-STOP-Befehl. Der Controller wertet die realen Relaisrückmeldungen aus und sendet den KURZ-Befehl der tatsächlich aktiven Richtung erneut, sodass das aktive LCN-Relais ausgeschaltet wird.
 
@@ -94,3 +96,5 @@ Die beiden vollständigen Fahrtrichtungen werden getrennt konfiguriert:
 Für Zwischenpositionen leitet das Modul daraus zwei unterschiedliche Behanggeschwindigkeiten ab. In Richtung AUF wird die volle Wendezeit von der konfigurierten Gesamtzeit 100→0 abgezogen; in Richtung ZU wird die konfigurierte Gesamtzeit 0→100 direkt als reine Behanglaufzeit verwendet. Sanftanlauf und Rest-Wendezeit werden anschließend abhängig vom tatsächlichen Startzustand zusätzlich berücksichtigt.
 
 Bei einem Laufzeit- oder Aufbaufehler verriegelt sich die Instanz. Alle Modulereignisse und Timer werden deaktiviert und es werden keine weiteren LCN-Befehle gesendet. Die lokale LCN-Steuerung bleibt frei. Eine Quittierung ist erst möglich, wenn beide realen Relais AUS melden; die Quittierung selbst sendet keinen Motorbefehl und macht die Positionsreferenz vorsorglich ungültig.
+
+Jeder automatische Endlagen- und ShakeFree-Ablauf besitzt einen eindeutigen Relais-AUS-Abschluss. Nach dem 30-s-Kalibrierfenster wird ZU einmal gestoppt und das reale Ausschalten beider Relais abgewartet. Bei aktivem ShakeFree folgt danach AUF für die konfigurierte Gegenfahrzeit, erneut STOP und anschließend der Lamellen-ZU-Nachlauf. Auch dieser Nachlauf wird nach der berechneten Wendezeit gestoppt. Erst nach real bestätigtem Relais-AUS geht der Ablauf in Ruhe. Der zyklische Healthcheck (Vorgabe 10 s) dient als zweite Deadline-Sicherung, falls der 1-s-Worker ausfällt. Bleibt ein Relais trotz einmaligem STOP aktiv, verriegelt sich die Instanz; ein zweites automatisches Toggle wird bewusst nicht gesendet.

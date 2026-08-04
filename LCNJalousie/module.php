@@ -5,13 +5,13 @@ declare(strict_types=1);
 /**
  * LCN Jalousie – Symcon 9.0 compatibility module.
  *
- * This module creates and maintains the V11.4 object tree, runtime scripts,
+ * This module creates and maintains the V11.6 object tree, runtime scripts,
  * events, links and configuration values below one module instance.
  * The motor interlock and local operation remain in LCN-PRO.
  */
 class LCNJalousie extends IPSModuleStrict
 {
-    private const VERSION = '0.1.14';
+    private const VERSION = '0.1.15';
     private const EXECUTE_PARENT_ACTION = '{7938A5A2-0981-5FE0-BE6C-8AA610D654EB}';
 
     private const STATUS_ACTIVE = 102;
@@ -65,7 +65,7 @@ class LCNJalousie extends IPSModuleStrict
         $this->RegisterPropertyInteger('WorkerWindowMs', 1500);
         $this->RegisterPropertyInteger('StatusSyncMs', 1500);
         $this->RegisterPropertyInteger('RelayCoalesceMs', 100);
-        $this->RegisterPropertyInteger('HealthcheckSeconds', 30);
+        $this->RegisterPropertyInteger('HealthcheckSeconds', 10);
 
         $this->RegisterPropertyFloat('PositionTolerance', 0.5);
         $this->RegisterPropertyFloat('SlatTolerance', 0.5);
@@ -79,6 +79,11 @@ class LCNJalousie extends IPSModuleStrict
         $this->RegisterAttributeBoolean('FaultLatched', false);
         $this->RegisterAttributeString('FaultMessage', '');
         $this->RegisterAttributeBoolean('RuntimeEnabled', false);
+        $this->RegisterAttributeBoolean('ReferenceValid', false);
+        $this->RegisterAttributeFloat('ReferencePosition', 0.0);
+        $this->RegisterAttributeFloat('ReferenceSlat', 0.0);
+        $this->RegisterAttributeInteger('ReferenceTimestamp', 0);
+        $this->RegisterAttributeString('ReferenceReason', '');
     }
 
     public function ApplyChanges(): void
@@ -97,7 +102,9 @@ class LCNJalousie extends IPSModuleStrict
             $ids = $this->ensureObjectTree();
             $this->ensureRuntimeScripts($ids['scripts']);
             $this->synchronizeConfiguration($ids['configuration']);
+            $this->migratePersistentReference($ids['state'], $previousGeneratedVersion);
             $this->invalidateReferenceAfterModelUpdate($ids['state'], $previousGeneratedVersion);
+            $this->restorePersistentReference($ids['state']);
             $this->applySafetyMigration($ids['control'], $ids['state'], $previousGeneratedVersion);
             $this->ensureHardwareLinks($ids['lcn']);
             $this->ensureEvents($ids['scripts']);
@@ -228,6 +235,8 @@ class LCNJalousie extends IPSModuleStrict
                         ['type' => 'Label', 'caption' => 'Richtungsabhängige Positionsrechnung: Für AUF wird aus der Gesamtzeit 100→0 die volle Wendezeit abgezogen; für ZU wird die Gesamtzeit 0→100 direkt als Behanglaufzeit verwendet.'],
                         ['type' => 'Label', 'caption' => 'Bewegungsmodell: 0 % → ZU ohne Vorlauf; 100 % → AUF mit voller Wendezeit; Zwischenposition gleiche Richtung mit Sanftanlauf; Gegenrichtung mit dem längeren Wert aus Sanftanlauf und Rest-Wendezeit.'],
                         ['type' => 'Label', 'caption' => 'Die Zeitverzögerung / das Kalibrierfenster läuft nach jeder vollständig von Symcon ausgeführten Fahrt auf 100 % ZU – unabhängig davon, ob ShakeFree aktiviert ist. Währenddessen sendet Symcon keinen STOP und keinen Gegenbefehl. ShakeFree nach Endlage ZU startet – sofern aktiviert – erst nach Ablauf dieser Verzögerung.'],
+                        ['type' => 'Label', 'caption' => 'Referenzierung: 0 % AUF und 100 % ZU werden jeweils erst nach der richtungsabhängigen Gesamtzeit plus Referenzreserve als gültige Endlage gespeichert. Die Referenz wird zusätzlich persistent als Modulattribut gesichert und bleibt bei normalem Übernehmen/Rebuild erhalten.'],
+                        ['type' => 'Label', 'caption' => 'Nach ShakeFree wird die Lamelle mit dem ZU-KURZ-Befehl auf 100 % zurückgestellt. Dieser Nachlauf wird nach der berechneten Wendezeit einmal gestoppt und erst nach real bestätigtem Relais-AUS als beendet bewertet.'],
                     ],
                 ],
                 [
@@ -241,10 +250,11 @@ class LCNJalousie extends IPSModuleStrict
                         ['type' => 'NumberSpinner', 'name' => 'WorkerWindowMs', 'caption' => 'Millisekunden-Schlussfenster', 'suffix' => ' ms', 'minimum' => 1000, 'maximum' => 3000],
                         ['type' => 'NumberSpinner', 'name' => 'StatusSyncMs', 'caption' => 'LCN-Statusabgleich', 'suffix' => ' ms', 'minimum' => 500, 'maximum' => 10000],
                         ['type' => 'NumberSpinner', 'name' => 'RelayCoalesceMs', 'caption' => 'Relaismeldungen zusammenfassen', 'suffix' => ' ms', 'minimum' => 0, 'maximum' => 1000],
-                        ['type' => 'NumberSpinner', 'name' => 'HealthcheckSeconds', 'caption' => 'Healthcheck', 'suffix' => ' s', 'minimum' => 5, 'maximum' => 3600],
+                        ['type' => 'NumberSpinner', 'name' => 'HealthcheckSeconds', 'caption' => 'Healthcheck / unabhängige STOP-Überwachung', 'suffix' => ' s', 'minimum' => 10, 'maximum' => 300],
                         ['type' => 'CheckBox', 'name' => 'RequestStatusOnStart', 'caption' => 'LCN-Status beim Initialisieren anfordern'],
                         ['type' => 'CheckBox', 'name' => 'AllowUnreferenced', 'caption' => 'Fahrt ohne vorherige Referenz erlauben'],
                         ['type' => 'CheckBox', 'name' => 'DiagnosticLog', 'caption' => 'Ausführliche Diagnose ins Symcon-Protokoll schreiben'],
+                        ['type' => 'Label', 'caption' => 'Relais-AUS-Sicherheit: Jede automatische Endlage, jedes ShakeFree-Teilstück und jeder Lamellennachlauf endet mit genau einem richtungsabhängigen KURZ-STOP und einer realen AUS-Bestätigung beider Relais. Bleibt ein Relais aktiv, wird die Instanz verriegelt; ein zweites automatisches Toggle wird wegen der Umschaltgefahr nicht gesendet.'],
                     ],
                 ],
             ],
@@ -359,6 +369,50 @@ class LCNJalousie extends IPSModuleStrict
         }
         $this->SetStatus(self::STATUS_FAULT_LATCHED);
         $this->SetSummary('inaktiv · Fehler quittieren');
+        $this->SyncVisualization();
+    }
+
+    public function StoreReference(float $position, float $slat, string $reason = ''): void
+    {
+        $position = max(0.0, min(100.0, $position));
+        $slat = max(0.0, min(100.0, $slat));
+        if ($position > 0.5 && $position < 99.5) {
+            throw new InvalidArgumentException('Eine Referenz darf nur an 0 % AUF oder 100 % ZU gespeichert werden.');
+        }
+
+        $position = $position < 50.0 ? 0.0 : 100.0;
+        $slat = $position <= 0.0 ? 0.0 : 100.0;
+        $timestamp = time();
+
+        $this->WriteAttributeBoolean('ReferenceValid', true);
+        $this->WriteAttributeFloat('ReferencePosition', $position);
+        $this->WriteAttributeFloat('ReferenceSlat', $slat);
+        $this->WriteAttributeInteger('ReferenceTimestamp', $timestamp);
+        $this->WriteAttributeString('ReferenceReason', trim($reason));
+
+        $stateCategoryID = @IPS_GetObjectIDByIdent('04_Istwerte', $this->InstanceID);
+        if ($stateCategoryID !== false) {
+            $this->writeReferenceObjects((int) $stateCategoryID, true, $position, $slat, $timestamp, $reason);
+        }
+        $this->SetValue('Position', (int) round($position));
+        $this->SetValue('Drehgrad', (int) round($slat));
+        $this->SetValue('Referenziert', true);
+        $this->SyncVisualization();
+    }
+
+    public function InvalidateReference(string $reason = ''): void
+    {
+        $this->WriteAttributeBoolean('ReferenceValid', false);
+        $this->WriteAttributeInteger('ReferenceTimestamp', 0);
+        $this->WriteAttributeString('ReferenceReason', trim($reason));
+
+        $stateCategoryID = @IPS_GetObjectIDByIdent('04_Istwerte', $this->InstanceID);
+        if ($stateCategoryID !== false) {
+            $position = $this->ReadAttributeFloat('ReferencePosition');
+            $slat = $this->ReadAttributeFloat('ReferenceSlat');
+            $this->writeReferenceObjects((int) $stateCategoryID, false, $position, $slat, 0, $reason);
+        }
+        $this->SetValue('Referenziert', false);
         $this->SyncVisualization();
     }
 
@@ -553,6 +607,11 @@ class LCNJalousie extends IPSModuleStrict
                 'ModuleEnabled' => $this->ReadPropertyBoolean('ModuleEnabled'),
                 'FaultLatched' => $this->ReadAttributeBoolean('FaultLatched'),
                 'FaultMessage' => $this->ReadAttributeString('FaultMessage'),
+                'ReferenceValid' => $this->ReadAttributeBoolean('ReferenceValid'),
+                'ReferencePosition' => $this->ReadAttributeFloat('ReferencePosition'),
+                'ReferenceSlat' => $this->ReadAttributeFloat('ReferenceSlat'),
+                'ReferenceTimestamp' => $this->ReadAttributeInteger('ReferenceTimestamp'),
+                'ReferenceReason' => $this->ReadAttributeString('ReferenceReason'),
                 'TotalTravelUpMs_100_to_0' => $this->ReadPropertyInteger('TotalTravelMs'),
                 'TotalTravelDownMs_0_to_100' => $this->ReadPropertyInteger('BlindTravelMs'),
                 'CalibrationDelayMs' => $this->ReadPropertyInteger('CalibrationWindowMs'),
@@ -1075,10 +1134,7 @@ class LCNJalousie extends IPSModuleStrict
             return;
         }
 
-        $referencedID = @IPS_GetObjectIDByIdent('Position_Referenziert', $stateCategoryID);
-        if ($referencedID !== false && IPS_VariableExists((int) $referencedID)) {
-            SetValueBoolean((int) $referencedID, false);
-        }
+        $this->persistReferenceInvalid($stateCategoryID, 'Modellupdate auf ' . self::VERSION . ': erneute Endlagenreferenz erforderlich');
         $lastActionID = @IPS_GetObjectIDByIdent('Letzte_Aktion', $stateCategoryID);
         if ($lastActionID !== false && IPS_VariableExists((int) $lastActionID)) {
             SetValueString((int) $lastActionID, 'Modulupdate ' . $previousVersion . ' → ' . self::VERSION . ': erneute Referenzfahrt erforderlich');
@@ -1100,10 +1156,7 @@ class LCNJalousie extends IPSModuleStrict
 
     private function invalidateReferenceWithoutCommand(int $stateCategoryID, string $reason): void
     {
-        $referencedID = @IPS_GetObjectIDByIdent('Position_Referenziert', $stateCategoryID);
-        if ($referencedID !== false && IPS_VariableExists((int) $referencedID)) {
-            SetValueBoolean((int) $referencedID, false);
-        }
+        $this->persistReferenceInvalid($stateCategoryID, $reason);
         $automaticID = @IPS_GetObjectIDByIdent('Automatik_Aktiv', $stateCategoryID);
         if ($automaticID !== false && IPS_VariableExists((int) $automaticID)) {
             SetValueBoolean((int) $automaticID, false);
@@ -1113,6 +1166,93 @@ class LCNJalousie extends IPSModuleStrict
             SetValueString((int) $lastActionID, date('d.m.Y H:i:s') . ' - ' . $reason);
         }
         $this->SetValue('Referenziert', false);
+    }
+
+    private function migratePersistentReference(int $stateCategoryID, string $previousVersion): void
+    {
+        // Ab 0.1.15 wird die Referenz zusätzlich als Modulattribute gespeichert.
+        // Damit bleibt sie bei einem normalen Übernehmen/Rebuild sicher erhalten.
+        if ($previousVersion === '' || version_compare($previousVersion, '0.1.15', '>=')) {
+            return;
+        }
+        $referencedID = @IPS_GetObjectIDByIdent('Position_Referenziert', $stateCategoryID);
+        if ($referencedID === false || !IPS_VariableExists((int) $referencedID) || !GetValueBoolean((int) $referencedID)) {
+            return;
+        }
+        $positionID = @IPS_GetObjectIDByIdent('Ist_Behang', $stateCategoryID);
+        $slatID = @IPS_GetObjectIDByIdent('Ist_Lamelle', $stateCategoryID);
+        if ($positionID === false || $slatID === false) {
+            return;
+        }
+        $position = GetValueFloat((int) $positionID);
+        if ($position > 0.5 && $position < 99.5) {
+            return;
+        }
+        $this->WriteAttributeBoolean('ReferenceValid', true);
+        $this->WriteAttributeFloat('ReferencePosition', $position < 50.0 ? 0.0 : 100.0);
+        $this->WriteAttributeFloat('ReferenceSlat', $position < 50.0 ? 0.0 : 100.0);
+        $this->WriteAttributeInteger('ReferenceTimestamp', time());
+        $this->WriteAttributeString('ReferenceReason', 'Migration aus Modulversion ' . $previousVersion);
+    }
+
+    private function restorePersistentReference(int $stateCategoryID): void
+    {
+        $valid = $this->ReadAttributeBoolean('ReferenceValid');
+        $position = $this->ReadAttributeFloat('ReferencePosition');
+        $slat = $this->ReadAttributeFloat('ReferenceSlat');
+        $timestamp = $this->ReadAttributeInteger('ReferenceTimestamp');
+        $reason = $this->ReadAttributeString('ReferenceReason');
+        $this->writeReferenceObjects($stateCategoryID, $valid, $position, $slat, $timestamp, $reason);
+        $this->SetValue('Referenziert', $valid);
+        if ($valid) {
+            $this->SetValue('Position', (int) round($position));
+            $this->SetValue('Drehgrad', (int) round($slat));
+        }
+    }
+
+    private function persistReferenceInvalid(int $stateCategoryID, string $reason): void
+    {
+        $this->WriteAttributeBoolean('ReferenceValid', false);
+        $this->WriteAttributeInteger('ReferenceTimestamp', 0);
+        $this->WriteAttributeString('ReferenceReason', $reason);
+        $this->writeReferenceObjects(
+            $stateCategoryID,
+            false,
+            $this->ReadAttributeFloat('ReferencePosition'),
+            $this->ReadAttributeFloat('ReferenceSlat'),
+            0,
+            $reason
+        );
+    }
+
+    private function writeReferenceObjects(int $stateCategoryID, bool $valid, float $position, float $slat, int $timestamp, string $reason): void
+    {
+        $referencedID = @IPS_GetObjectIDByIdent('Position_Referenziert', $stateCategoryID);
+        if ($referencedID !== false && IPS_VariableExists((int) $referencedID)) {
+            SetValueBoolean((int) $referencedID, $valid);
+        }
+        $positionID = @IPS_GetObjectIDByIdent('Ist_Behang', $stateCategoryID);
+        $slatID = @IPS_GetObjectIDByIdent('Ist_Lamelle', $stateCategoryID);
+        if ($valid && $positionID !== false && IPS_VariableExists((int) $positionID)) {
+            SetValueFloat((int) $positionID, $position);
+        }
+        if ($valid && $slatID !== false && IPS_VariableExists((int) $slatID)) {
+            SetValueFloat((int) $slatID, $slat);
+        }
+        $endID = @IPS_GetObjectIDByIdent('Referenz_Endlage', $stateCategoryID);
+        if ($endID !== false && IPS_VariableExists((int) $endID)) {
+            SetValueInteger((int) $endID, $valid ? ($position < 50.0 ? 1 : 2) : 0);
+        }
+        $timestampID = @IPS_GetObjectIDByIdent('Letzte_Referenzierung', $stateCategoryID);
+        if ($timestampID !== false && IPS_VariableExists((int) $timestampID)) {
+            SetValueInteger((int) $timestampID, $valid ? $timestamp : 0);
+        }
+        if ($reason !== '') {
+            $lastActionID = @IPS_GetObjectIDByIdent('Letzte_Aktion', $stateCategoryID);
+            if ($lastActionID !== false && IPS_VariableExists((int) $lastActionID)) {
+                SetValueString((int) $lastActionID, date('d.m.Y H:i:s') . ' - ' . $reason);
+            }
+        }
     }
 
     private function ensureProfiles(): void
@@ -1151,6 +1291,10 @@ class LCNJalousie extends IPSModuleStrict
         IPS_SetVariableProfileAssociation('LCNJAL.Reference', 0, 'Keine', '', -1);
         IPS_SetVariableProfileAssociation('LCNJAL.Reference', 1, 'AUF referenzieren', 'ArrowUp', 0x4F81BD);
         IPS_SetVariableProfileAssociation('LCNJAL.Reference', 2, 'AB referenzieren', 'ArrowDown', 0x70AD47);
+        $this->profile('LCNJAL.ReferenceEnd', 1, 0, 2, 0, '', '', 'Shutter');
+        IPS_SetVariableProfileAssociation('LCNJAL.ReferenceEnd', 0, 'keine gültige Referenz', 'Warning', 0xC00000);
+        IPS_SetVariableProfileAssociation('LCNJAL.ReferenceEnd', 1, '0 % AUF', 'ArrowUp', 0x4F81BD);
+        IPS_SetVariableProfileAssociation('LCNJAL.ReferenceEnd', 2, '100 % ZU', 'ArrowDown', 0x70AD47);
     }
 
     private function profile(string $name, int $type, float $min, float $max, float $step, string $prefix, string $suffix, string $icon): void
@@ -1243,11 +1387,14 @@ class LCNJalousie extends IPSModuleStrict
         $this->variable($parentID, 'Fahrstatus', 'Fahrstatus', 1, 'LCNJAL.DriveState', 30, 0, false);
         $this->variable($parentID, 'Phase', 'Ablaufphase', 1, 'LCNJAL.Phase', 40, 0, false);
         $this->variable($parentID, 'Position_Referenziert', 'Position referenziert', 0, '~Switch', 50, false, false);
+        $this->variable($parentID, 'Referenz_Endlage', 'Letzte Referenz-Endlage', 1, 'LCNJAL.ReferenceEnd', 55, 0, false);
+        $this->variable($parentID, 'Letzte_Referenzierung', 'Letzte Referenzierung', 1, '~UnixTimestamp', 57, 0, false);
         $this->variable($parentID, 'Automatik_Aktiv', 'Automatik aktiv', 0, '~Switch', 60, false, false);
         $this->variable($parentID, 'Fehlertext', 'Fehlertext', 3, '', 70, '', false);
         $this->variable($parentID, 'Letzte_Aktion', 'Letzte Aktion', 3, '', 80, 'Noch nicht initialisiert', false);
         $this->variable($parentID, 'Letzte_Fahrtdauer_ms', 'Letzte Fahrtdauer [ms]', 1, '', 90, 0, false);
         $this->variable($parentID, 'Letzte_Statusmeldung', 'Letzte Relaisstatusmeldung', 1, '~UnixTimestamp', 100, 0, false);
+        $this->variable($parentID, 'Letzte_Relais_AUS_Bestaetigung', 'Letzte Bestätigung: beide Relais AUS', 1, '~UnixTimestamp', 105, 0, false);
         $this->variable($parentID, 'Fehler_Verriegelt', 'Fehler verriegelt', 0, '~Switch', 110, false, false);
     }
 
@@ -1282,6 +1429,7 @@ class LCNJalousie extends IPSModuleStrict
             ['Sync_bis_ms', 'Statusabgleich bis [monotone ms]', 2, '', 260, 0.0, false],
             ['Sync_Relais_AUF_Empfangen', 'Statussync Relais AUF empfangen', 0, '~Switch', 270, false, false],
             ['Sync_Relais_AB_Empfangen', 'Statussync Relais AB empfangen', 0, '~Switch', 280, false, false],
+            ['Shake_Nachlauf_Aktiv', 'ShakeFree-Lamellen-ZU-Nachlauf aktiv', 0, '~Switch', 290, false, false],
         ];
         foreach ($schema as $v) {
             $this->variable($parentID, ...$v);
@@ -1338,10 +1486,10 @@ class LCNJalousie extends IPSModuleStrict
     private function ensureRuntimeScripts(int $scriptsCategoryID): void
     {
         $scripts = [
-            'Controller' => ['10 Controller V11.4', 20, 'Controller.php'],
-            'Worker' => ['20 Worker V11.4', 30, 'Worker.php'],
-            'Healthcheck' => ['30 Healthcheck V11.4', 40, 'Healthcheck.php'],
-            'Diagnose' => ['90 Diagnose V11.4', 90, 'Diagnose.php'],
+            'Controller' => ['10 Controller V11.6', 20, 'Controller.php'],
+            'Worker' => ['20 Worker V11.6', 30, 'Worker.php'],
+            'Healthcheck' => ['30 Healthcheck V11.6', 40, 'Healthcheck.php'],
+            'Diagnose' => ['90 Diagnose V11.6', 90, 'Diagnose.php'],
         ];
         foreach ($scripts as $ident => [$name, $position, $file]) {
             $path = __DIR__ . '/scripts/' . $file;

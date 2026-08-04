@@ -354,7 +354,7 @@ def check_measured_blind_start_model() -> None:
         "['Sanftanlauf_ms', 'Sanftanlauf Zwischenposition [ms]'",
         'invalidateReferenceAfterModelUpdate',
         "version_compare($previousVersion, '0.1.14', '>=')",
-        "SetValueBoolean((int) $referencedID, false)",
+        'persistReferenceInvalid',
         "Gesamtlaufzeit 100 % ZU → 0 % AUF",
         "Gesamtlaufzeit 0 % AUF → 100 % ZU",
         "ShakeFree nach Endlage ZU",
@@ -430,6 +430,13 @@ def check_timing_examples() -> None:
         ERRORS.append('directional timing: 0-to-100 ZU blind travel must use configured down total')
     if turn_ms + blind_up_ms != total_up_ms:
         ERRORS.append('directional timing: 100-to-0 AUF total must include full turn time')
+
+    reserve_ms = 5000.0
+    max_ms = max(total_up_ms, total_down_ms) + reserve_ms
+    if min(total_up_ms + reserve_ms, max_ms) != 187000.0:
+        ERRORS.append('reference timing: AUF reference must use total-up plus reserve')
+    if min(total_down_ms + reserve_ms, max_ms) != 180500.0:
+        ERRORS.append('reference timing: ZU reference must use total-down plus reserve')
 
 
 
@@ -511,6 +518,72 @@ def check_calibration_window_and_fault_latch() -> None:
         ERRORS.append(f'{controller_path.relative_to(ROOT)}: calibration window must run after every complete close, not only when ShakeFree is enabled')
 
 
+
+
+def check_reference_persistence_and_relay_off() -> None:
+    module_path = ROOT / 'LCNJalousie' / 'module.php'
+    controller_path = ROOT / 'LCNJalousie' / 'scripts' / 'Controller.php'
+    worker_path = ROOT / 'LCNJalousie' / 'scripts' / 'Worker.php'
+    if not all(path.is_file() for path in [module_path, controller_path, worker_path]):
+        return
+
+    module = module_path.read_text(encoding='utf-8')
+    controller = controller_path.read_text(encoding='utf-8')
+    worker = worker_path.read_text(encoding='utf-8')
+
+    required_module = [
+        "RegisterAttributeBoolean('ReferenceValid', false)",
+        "RegisterAttributeFloat('ReferencePosition', 0.0)",
+        "RegisterAttributeInteger('ReferenceTimestamp', 0)",
+        'public function StoreReference(float $position, float $slat',
+        'public function InvalidateReference(string $reason',
+        'private function migratePersistentReference',
+        'private function restorePersistentReference',
+        'private function persistReferenceInvalid',
+        "'Referenz_Endlage', 'Letzte Referenz-Endlage'",
+        "'Letzte_Referenzierung', 'Letzte Referenzierung'",
+        "'Letzte_Relais_AUS_Bestaetigung', 'Letzte Bestätigung: beide Relais AUS'",
+        "RegisterPropertyInteger('HealthcheckSeconds', 10)",
+        "'Healthcheck / unabhängige STOP-Überwachung'",
+    ]
+    for pattern in required_module:
+        if pattern not in module:
+            ERRORS.append(f'{module_path.relative_to(ROOT)}: persistent reference storage missing ({pattern})')
+
+    required_controller = [
+        'function J_SetReference',
+        'function J_InvalidateReference',
+        'function J_ReferenceDurationMs',
+        "J_ConfigInt($rootID, 'Referenzreserve_ms')",
+        'Endlage AUF nach richtungsabhängiger Gesamtzeit plus Referenzreserve erreicht',
+        'Endlage ZU nach richtungsabhängiger Gesamtzeit plus Referenzreserve erreicht',
+        'function J_MarkRelaysOff',
+        'Ablaufabschluss verweigert: mindestens ein Motorrelais ist noch aktiv',
+        'function J_RunHealthcheck',
+        'Zweite, unabhängige Sicherung neben dem 1-s-Worker',
+        "'Shake_Nachlauf_Aktiv'",
+        'Lamellen-ZU-Befehl gestoppt und beide Relais AUS bestätigt',
+    ]
+    for pattern in required_controller:
+        if pattern not in controller:
+            ERRORS.append(f'{controller_path.relative_to(ROOT)}: reference/relay-off safety missing ({pattern})')
+
+    sync_start = controller.find('function J_BeginStatusSync')
+    sync_end = controller.find('function J_CompleteStatusSync', sync_start)
+    if sync_start >= 0 and sync_end > sync_start:
+        sync_body = controller[sync_start:sync_end]
+        if "Position_Referenziert'), false" in sync_body:
+            ERRORS.append(f'{controller_path.relative_to(ROOT)}: status sync must not erase a persistent reference')
+
+    if 'J_RunHealthcheck($rootID);' not in controller:
+        ERRORS.append(f'{controller_path.relative_to(ROOT)}: HEALTHCHECK dispatch must call the deadline backup')
+
+    # The 1-s worker remains the primary timer. The periodic healthcheck is the
+    # independent fallback and therefore must remain installed as a separate script.
+    if 'IPS_SetScriptTimer' not in worker:
+        ERRORS.append(f'{worker_path.relative_to(ROOT)}: primary worker timer missing')
+
+
 def main() -> int:
     check_required()
     check_root_structure()
@@ -526,6 +599,7 @@ def main() -> int:
     check_measured_blind_start_model()
     check_timing_examples()
     check_calibration_window_and_fault_latch()
+    check_reference_persistence_and_relay_off()
     check_php()
     if ERRORS:
         print('VALIDATION FAILED')
