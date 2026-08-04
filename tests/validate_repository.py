@@ -28,8 +28,8 @@ def check_required() -> None:
         'LCNJalousie/scripts/Worker.php',
         'LCNJalousie/scripts/Healthcheck.php',
         'LCNJalousie/scripts/Diagnose.php',
-        'LCNJalousieConfigurator/module.json',
-        'LCNJalousieConfigurator/module.php',
+        'LCNJalousieKonfigurator/module.json',
+        'LCNJalousieKonfigurator/module.php',
     ]
     for rel in required:
         if not (ROOT / rel).is_file():
@@ -61,12 +61,36 @@ def check_php() -> None:
             ERRORS.append(f'{path.relative_to(ROOT)}: {result.stdout}{result.stderr}')
 
 
+def check_module_identity(module_dir: Path) -> None:
+    metadata_path = module_dir / 'module.json'
+    php_path = module_dir / 'module.php'
+    if not metadata_path.is_file() or not php_path.is_file():
+        return
+    data = json.loads(metadata_path.read_text(encoding='utf-8'))
+    expected_class = str(data.get('name', '')).replace(' ', '')
+    php = php_path.read_text(encoding='utf-8')
+    import re
+    match = re.search(r'\bclass\s+([A-Za-z_][A-Za-z0-9_]*)\s+extends\s+IPSModule(?:Strict)?\b', php)
+    if not match:
+        ERRORS.append(f'{php_path.relative_to(ROOT)}: module class declaration not found')
+        return
+    actual_class = match.group(1)
+    if actual_class != expected_class:
+        ERRORS.append(
+            f'{php_path.relative_to(ROOT)}: class {actual_class} must equal module.json name without spaces: {expected_class}'
+        )
+    if module_dir.name != actual_class:
+        ERRORS.append(
+            f'{module_dir.relative_to(ROOT)}: folder name should equal module class name {actual_class}'
+        )
+
+
 def check_metadata() -> None:
     library = json.loads((ROOT / 'library.json').read_text(encoding='utf-8'))
     if library.get('compatibility', {}).get('version') != '9.0':
         ERRORS.append('library.json: compatibility.version must be 9.0')
     module_ids: set[str] = set()
-    for path in [ROOT / 'LCNJalousie' / 'module.json', ROOT / 'LCNJalousieConfigurator' / 'module.json']:
+    for path in [ROOT / 'LCNJalousie' / 'module.json', ROOT / 'LCNJalousieKonfigurator' / 'module.json']:
         data = json.loads(path.read_text(encoding='utf-8'))
         module_id = data.get('id', '')
         if module_id in module_ids:
@@ -74,6 +98,7 @@ def check_metadata() -> None:
         module_ids.add(module_id)
         if not data.get('prefix', '').isalnum():
             ERRORS.append(f'{path.relative_to(ROOT)}: prefix must be alphanumeric')
+        check_module_identity(path.parent)
 
 
 def main() -> int:

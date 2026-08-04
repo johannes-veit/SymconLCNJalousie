@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-class LCNJalousieConfigurator extends IPSModuleStrict
+class LCNJalousieKonfigurator extends IPSModuleStrict
 {
     private const DEVICE_MODULE_ID = '{3057B192-E835-4916-AF1D-D89D6302DF74}';
 
