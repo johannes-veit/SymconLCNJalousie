@@ -11,7 +11,7 @@ declare(strict_types=1);
  */
 class LCNJalousie extends IPSModuleStrict
 {
-    private const VERSION = '0.1.8';
+    private const VERSION = '0.1.9';
     private const EXECUTE_PARENT_ACTION = '{7938A5A2-0981-5FE0-BE6C-8AA610D654EB}';
 
     private const STATUS_ACTIVE = 102;
@@ -754,7 +754,11 @@ class LCNJalousie extends IPSModuleStrict
 
     private function invalidateReferenceAfterModelUpdate(int $stateCategoryID, string $previousVersion): void
     {
-        if ($previousVersion === '' || $previousVersion === self::VERSION) {
+        // Nur Updates von einem Stand vor dem gemessenen Bewegungsmodell
+        // (0.1.7) machen eine vorhandene Positionsreferenz unbrauchbar.
+        // Reine Visualisierungsupdates wie 0.1.8 -> 0.1.9 dürfen eine bereits
+        // gültige Referenz nicht ohne technischen Grund verwerfen.
+        if ($previousVersion === '' || version_compare($previousVersion, '0.1.7', '>=')) {
             return;
         }
 

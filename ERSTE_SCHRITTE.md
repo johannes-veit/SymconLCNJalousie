@@ -20,7 +20,7 @@ Diese Anleitung führt Sie ohne Git-Vorkenntnisse vom vorbereiteten Ordner bis z
 
 ## B. Ersten Stand speichern und öffentlich veröffentlichen
 
-1. Unten links bei **Summary** tragen Sie ein: `Add interactive Symcon shutter tile 0.1.8`.
+1. Unten links bei **Summary** tragen Sie ein: `Fix responsive Symcon shutter tile 0.1.9`.
 2. Klicken Sie auf **Commit to main**.
 3. Klicken Sie oben auf **Publish repository**.
 4. Kontrollieren Sie den Namen `SymconLCNJalousie`.
@@ -103,7 +103,7 @@ Arbeiten Sie die Bereiche von oben nach unten ab:
 Dieser Fehler betraf Version 0.1.2. In Version 0.1.3 wird die Initialkonfiguration des Konfigurators korrekt als JSON-Objekt `{}` ausgegeben. Nach dem Update in der Symcon-Modulverwaltung kann die Zeile „Neue LCN-Jalousie“ über „Alle erstellen“ angelegt werden.
 ## Kachel und erste Referenz
 
-Nach dem Update auf 0.1.8 die Jalousieinstanz einmal mit **Übernehmen** neu anwenden und die Kachel-Visualisierung neu laden. Die Instanz zeigt anschließend die eigene HTML-SDK-Kachel mit Behang- und Lamellenslider, 0/50/100-Schnellwahltasten, STOP, ShakeFree und Fahrstatus.
+Nach dem Update auf 0.1.9 die Jalousieinstanz einmal mit **Übernehmen** neu anwenden und die Kachel-Visualisierung mit `Strg + F5` neu laden. Die Instanz zeigt anschließend die korrigierte HTML-SDK-Kachel: Behang mit runden Tasten AUF/STOP/ZU und Slider, Lamellen mit Grafik, Slider und 0/50/100-Schnellwahltasten, ShakeFree sowie dem kompakten Laufstatus. Der Instanzname wird von Symcon selbst dargestellt und innerhalb der Kachel nicht wiederholt.
 
 Solange `Position gültig` ausgeschaltet ist, sind 0 %/0 % nur Initialwerte und keine bestätigte reale Stellung. Führen Sie als ersten Abgleich im Modul eine **Referenzfahrt AUF** oder **Referenzfahrt AB** aus. Nach dem kontrollierten Fahrtende setzt das Modul 0 %/0 % beziehungsweise 100 %/100 % und schaltet `Position gültig` ein. Ist die Position noch unbekannt, behandelt das Modul den ersten Symcon-Endlagenauftrag auf 0 % oder 100 % automatisch als volle Referenzfahrt mit der maximal überwachten Fahrzeit. Die explizite Referenzfahrt ist für den Erstabgleich trotzdem am klarsten und bewusst auswählbar.
 

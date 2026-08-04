@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.9 – 2026-08-04
+
+- HTML-SDK-Fehler behoben: SVG-Elemente werden nicht mehr über die nur lesbare Eigenschaft `className` verändert.
+- Mittlere Statuskachel entfernt; der kompakte Laufstatus bleibt unten in der Kachel erhalten.
+- Behangbedienung auf drei gleich große runde Tasten `AUF`, `STOP`, `ZU` plus vertikalen Slider reduziert.
+- Lamellenbereich mit grafischer, dynamischer Lamellenstellung, vertikalem Slider und den Schnellwahltasten 0/50/100 % neu angeordnet.
+- Beide Slider zeigen 0 % oben und 100 % unten; die Prozentwerte stehen unterhalb der unteren Beschriftung `ZU`.
+- Der Instanzname wird nicht mehr innerhalb der HTML-Kachel wiederholt.
+- Theme-Erkennung folgt der tatsächlichen Symcon-Visualisierung statt der Dark-Mode-Einstellung des Smartphones; bei nicht lesbarem Parent gilt ein heller Fallback.
+- ShakeFree bleibt als kleiner Ein/Aus-Schalter erhalten.
+- Reine Visualisierungsupdates verwerfen eine bereits gültige Positionsreferenz nicht mehr; nur der Wechsel von einem Stand vor 0.1.7 erzwingt eine Neureferenzierung.
+
 ## 0.1.8 – 2026-08-04
 
 - Eigene interaktive Symcon-Kachel über das offizielle HTML-SDK ergänzt.

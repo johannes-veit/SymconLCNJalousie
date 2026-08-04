@@ -237,8 +237,8 @@ def check_custom_html_tile() -> None:
         "requestAction(ident, value)",
         "sendJalousieAction('Stop', true)",
         "sendJalousieAction('ShakeFree'",
+        'class="jal-round-button jal-position-command"',
         'data-action="Position" data-value="0"',
-        'data-action="Position" data-value="50"',
         'data-action="Position" data-value="100"',
         'data-action="Drehgrad" data-value="0"',
         'data-action="Drehgrad" data-value="50"',
@@ -247,12 +247,28 @@ def check_custom_html_tile() -> None:
         'id="jal-rotation"',
         'id="jal-stop"',
         'id="jal-shakefree"',
-        'id="jal-status-text"',
-        'GESTOPPT',
+        'id="jal-run-status-text"',
+        'class="jal-slat-graphic"',
+        'function syncSymconTheme()',
+        'findSymconBackground()',
+        'document.documentElement.dataset.jalTheme',
+        'Laufstatus: GESTOPPT',
     ]
     for pattern in required_html:
         if pattern not in html:
             ERRORS.append(f'{html_path.relative_to(ROOT)}: requested visualization control missing ({pattern})')
+
+    forbidden_html = [
+        'element.className =',
+        '.className =',
+        'id="jal-name"',
+        'class="jal-status-panel"',
+        'data-action="Position" data-value="50"',
+        '@media (prefers-color-scheme: dark)',
+    ]
+    for pattern in forbidden_html:
+        if pattern in html:
+            ERRORS.append(f'{html_path.relative_to(ROOT)}: obsolete or unsafe tile code still present ({pattern})')
 
     if '<iframe' in html.lower() or 'fetch(' in html or 'XMLHttpRequest' in html:
         ERRORS.append(f'{html_path.relative_to(ROOT)}: tile must use the secured HTML-SDK channel only')
@@ -274,6 +290,7 @@ def check_measured_blind_start_model() -> None:
         "'Sanftanlauf_ms' => ['SoftStartMs', 1]",
         "['Sanftanlauf_ms', 'Sanftanlauf Zwischenposition [ms]'",
         'invalidateReferenceAfterModelUpdate',
+        "version_compare($previousVersion, '0.1.7', '>=')",
         "SetValueBoolean((int) $referencedID, false)",
     ]
     for pattern in required_module:
