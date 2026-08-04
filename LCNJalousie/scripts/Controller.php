@@ -411,6 +411,46 @@ function J_LcnInstanceReady(int $instanceID): bool
         && (int) ($instance['ModuleInfo']['ModuleType'] ?? -1) === 2;
 }
 
+function J_LcnModuleForVariable(int $variableID): int
+{
+    if (!IPS_VariableExists($variableID)) {
+        return 0;
+    }
+
+    $currentObjectID = IPS_GetParent($variableID);
+    $logicalVisited = [];
+
+    for ($logicalGuard = 0; $logicalGuard < 32 && $currentObjectID > 0; $logicalGuard++) {
+        if (isset($logicalVisited[$currentObjectID])) {
+            break;
+        }
+        $logicalVisited[$currentObjectID] = true;
+
+        if (IPS_InstanceExists($currentObjectID)) {
+            $currentInstanceID = $currentObjectID;
+            $connectionVisited = [];
+
+            for ($connectionGuard = 0; $connectionGuard < 32 && $currentInstanceID > 0; $connectionGuard++) {
+                if (isset($connectionVisited[$currentInstanceID]) || !IPS_InstanceExists($currentInstanceID)) {
+                    break;
+                }
+                $connectionVisited[$currentInstanceID] = true;
+
+                if (J_LcnInstanceReady($currentInstanceID)) {
+                    return $currentInstanceID;
+                }
+
+                $instance = IPS_GetInstance($currentInstanceID);
+                $currentInstanceID = (int) ($instance['ConnectionID'] ?? 0);
+            }
+        }
+
+        $currentObjectID = IPS_GetParent($currentObjectID);
+    }
+
+    return 0;
+}
+
 function J_SendDirection(int $rootID, int $direction): bool
 {
     if (!J_IsDirection($direction)) {
@@ -499,12 +539,29 @@ function J_BlindStartDelayMs(int $rootID, float $startBlind, float $startSlat, i
     return max($softStartMs, J_SlatTurnTimeMs($rootID, $startSlat, $direction));
 }
 
+function J_DirectionalBlindTravelMs(int $rootID, int $direction): float
+{
+    $turnMs = (float) J_ConfigInt($rootID, 'Wendezeit_ms');
+    $totalUpMs = (float) J_ConfigInt($rootID, 'Gesamtlaufzeit_ms');
+    $totalDownMs = (float) J_ConfigInt($rootID, 'Behanglaufzeit_ms');
+
+    // Kompatible Konfigurations-Idents:
+    // Gesamtlaufzeit_ms = Gesamtzeit 100 % ZU -> 0 % AUF inkl. voller Wendezeit.
+    // Behanglaufzeit_ms = Gesamtzeit 0 % AUF -> 100 % ZU.
+    $blindTravelMs = $direction === J_DIR_UP
+        ? $totalUpMs - $turnMs
+        : $totalDownMs;
+
+    if ($blindTravelMs <= 0.0) {
+        throw new RuntimeException('Richtungsabhängige Behanglaufzeit ist ungueltig.');
+    }
+
+    return $blindTravelMs;
+}
+
 function J_BlindDurationMs(int $rootID, float $startBlind, float $targetBlind, float $startSlat, int $direction, bool $withReserve): int
 {
-    $blindTravelMs = (float) J_ConfigInt($rootID, 'Behanglaufzeit_ms');
-    if ($blindTravelMs <= 0.0) {
-        throw new RuntimeException('Behanglaufzeit_ms muss groesser 0 sein.');
-    }
+    $blindTravelMs = J_DirectionalBlindTravelMs($rootID, $direction);
     $blindMs = abs($targetBlind - $startBlind) / 100.0 * $blindTravelMs;
     $duration = J_BlindStartDelayMs($rootID, $startBlind, $startSlat, $direction) + $blindMs;
     if ($withReserve) {
@@ -535,9 +592,9 @@ function J_UpdatePositionToNow(int $rootID, ?float $nowMs = null): void
     $startBlind = GetValueFloat(J_ID($rootID, '05_Intern', 'Start_Behang'));
     $startSlat = GetValueFloat(J_ID($rootID, '05_Intern', 'Start_Lamelle'));
     $turnMs = (float) J_ConfigInt($rootID, 'Wendezeit_ms');
-    $blindTravelMs = (float) J_ConfigInt($rootID, 'Behanglaufzeit_ms');
+    $blindTravelMs = J_DirectionalBlindTravelMs($rootID, $state);
     if ($turnMs <= 0.0 || $blindTravelMs <= 0.0) {
-        throw new RuntimeException('Laufzeiten muessen groesser 0 sein.');
+        throw new RuntimeException('Richtungsabhängige Laufzeiten muessen groesser 0 sein.');
     }
 
     $turnNeeded = J_SlatTurnTimeMs($rootID, $startSlat, $state);
@@ -1153,7 +1210,7 @@ function J_HandleRealStop(int $rootID, int $oldDirection): void
         $calibrationDeadline = GetValueFloat(J_ID($rootID, '05_Intern', 'Zielzeit_ms'));
         $calibrationComplete = $stopRequested && ($calibrationDeadline <= 0.0 || J_NowMs() + 100.0 >= $calibrationDeadline);
         if (!$calibrationComplete) {
-            J_FinishIdle($rootID, 'Kalibrierfenster vorzeitig beendet; ShakeFree aus Sicherheitsgruenden verworfen');
+            J_FinishIdle($rootID, 'Zeitverzoegerung/Kalibrierfenster vorzeitig beendet; ShakeFree nach Endlage ZU aus Sicherheitsgruenden verworfen');
             return;
         }
 
@@ -1202,7 +1259,7 @@ function J_StartConfiguredFollowSlatOrFinish(int $rootID): void
 function J_StartShakeNow(int $rootID): void
 {
     if (J_RelayState($rootID) !== J_DIR_NONE) {
-        J_SetError($rootID, 'ShakeFree kann nur im Stillstand starten.', false);
+        J_SetError($rootID, 'ShakeFree nach Endlage ZU kann nur im Stillstand starten.', false);
         return;
     }
 
@@ -1213,7 +1270,7 @@ function J_StartShakeNow(int $rootID): void
         IPS_Sleep($pauseMs);
     }
     if (J_RelayState($rootID) !== J_DIR_NONE) {
-        J_SetError($rootID, 'ShakeFree-Umschaltpause: Relais sind nicht sicher AUS.', false);
+        J_SetError($rootID, 'ShakeFree nach Endlage ZU – Umschaltpause: Relais sind nicht sicher AUS.', false);
         return;
     }
 
@@ -1233,7 +1290,7 @@ function J_StartShakeNow(int $rootID): void
     SetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase'), J_PHASE_WAIT_START);
     SetValueBoolean(J_ID($rootID, '04_Istwerte', 'Automatik_Aktiv'), true);
     J_SetWorker($rootID, true);
-    J_SetLastAction($rootID, 'ShakeFree AUF ' . $duration . ' ms, Auftrag ' . $order);
+    J_SetLastAction($rootID, 'ShakeFree nach Endlage ZU: AUF ' . $duration . ' ms, Auftrag ' . $order);
     if (!J_SendDirection($rootID, J_DIR_UP)) {
         J_SetWorker($rootID, false);
     }
@@ -1268,7 +1325,7 @@ function J_HandleDeadline(int $rootID, int $order): void
         );
         SetValueBoolean(J_ID($rootID, '04_Istwerte', 'Automatik_Aktiv'), true);
         J_SetWorker($rootID, true);
-        J_SetLastAction($rootID, '100 % ZU erreicht; Kalibrierfenster gestartet, ShakeFree fruehestens danach');
+        J_SetLastAction($rootID, '100 % ZU erreicht; Zeitverzoegerung/Kalibrierfenster gestartet, ShakeFree nach Endlage ZU fruehestens danach');
         return;
     }
 
@@ -1451,7 +1508,7 @@ function J_SetError(int $rootID, string $message, bool $tryStop): void
 function J_BeginStatusSync(int $rootID, string $reason): void
 {
     J_SetWorker($rootID, false);
-    // M22-Ausgangsstatus kann beim RequestStatus einen persistenten Toggle-Baselinewert
+    // Der Ausgangsstatus des frei gewählten GT8-Ereignis-UPU kann beim RequestStatus einen persistenten Toggle-Baselinewert
     // liefern. Die GT8-OnChange-Ereignisse werden deshalb waehrend des gesamten
     // Statusabgleichs deaktiviert und erst nach erfolgreichem Abschluss reaktiviert.
     J_SetGt8EventsActive($rootID, false);
@@ -1482,10 +1539,15 @@ function J_BeginStatusSync(int $rootID, string $reason): void
         if (!IPS_FunctionExists('LCN_RequestStatus')) {
             $requestErrors[] = 'LCN_RequestStatus ist in diesem Symcon-Kernel nicht registriert. LCN-Modulinstallation pruefen.';
         } else {
-            $statusInstances = array_values(array_unique([
+            // Auch frei gewählte GT8-LANG-Ausgänge werden abgefragt. So ist
+            // ihr Toggle-Basiswert nach einem Neustart korrekt synchronisiert,
+            // selbst wenn Ausgang 3/4 auf einem anderen UPU liegt.
+            $statusInstances = array_values(array_unique(array_filter([
                 J_ConfigInt($rootID, 'LCN_Sendemodulinstanz_ID'),
                 J_ConfigInt($rootID, 'LCN_Aktormodulinstanz_ID'),
-            ]));
+                J_LcnModuleForVariable(J_ConfigInt($rootID, 'GT8_LANG_AUF_ID')),
+                J_LcnModuleForVariable(J_ConfigInt($rootID, 'GT8_LANG_AB_ID')),
+            ], static fn (int $id): bool => $id > 0)));
             foreach ($statusInstances as $instanceID) {
                 if (!J_LcnInstanceReady($instanceID)) {
                     $requestErrors[] = 'LCN-Modulinstanz nicht aktiv/kein Splitter: ' . $instanceID;
@@ -1543,7 +1605,7 @@ function J_CompleteStatusSync(int $rootID, int $order): void
     }
 
     // Erst jetzt wieder freigeben: So kann kein verzögert ausgeführtes
-    // Baseline-OnChange des M22 nach dem Statusabgleich einen Lamellenauftrag starten.
+    // Baseline-OnChange des gewählten GT8-Ereignis-UPU nach dem Statusabgleich einen Lamellenauftrag starten.
     J_SetGt8EventsActive($rootID, true);
 
     $state = J_RelayState($rootID);

@@ -62,12 +62,13 @@ Arbeiten Sie die Bereiche von oben nach unten ab:
 2. **LCN-Aktormodul** – das Modul mit den Motorrelais, zum Beispiel M93.
 3. **Relaisstatus AUF** – echte Boolean-Statusvariable des AUF-Relais.
 4. **Relaisstatus AB** – echte Boolean-Statusvariable des AB-Relais.
-5. **GT8 LANG AUF** – simulierter Ausgang 3.
-6. **GT8 LANG AB** – simulierter Ausgang 4.
-7. Laufzeiten kontrollieren und bei Bedarf auf Ihre gemessenen Werte ändern.
-8. **TS-Datenfelder noch nicht bestätigen.** Erst LCN-PRO und PCHK-Busmonitor prüfen.
-9. Klicken Sie auf **Übernehmen**.
-10. Das Modul zeigt den noch fehlenden Punkt als Instanzstatus an.
+5. **GT8 LANG AUF** – Boolean-Status eines simulierten Ausgangs 3. Dieser Ausgang darf von einem beliebigen freien UPU stammen.
+6. **GT8 LANG ZU** – Boolean-Status eines simulierten Ausgangs 4. Dieser Ausgang darf ebenfalls von einem beliebigen freien UPU stammen.
+7. Prüfen Sie in LCN-PRO, dass der jeweilige fremde Ausgang als zweites Ziel der korrekten GT8-Taste am Haupt-UPU programmiert ist.
+8. Tragen Sie die getrennten Gesamtzeiten für `0 % AUF → 100 % ZU` und `100 % ZU → 0 % AUF` ein.
+9. **TS-Datenfelder noch nicht bestätigen.** Erst LCN-PRO und PCHK-Busmonitor prüfen.
+10. Klicken Sie auf **Übernehmen**.
+11. Das Modul zeigt den noch fehlenden Punkt als Instanzstatus an.
 
 ## F. TS-Datenfelder sicher freigeben
 
@@ -103,7 +104,7 @@ Arbeiten Sie die Bereiche von oben nach unten ab:
 Dieser Fehler betraf Version 0.1.2. In Version 0.1.3 wird die Initialkonfiguration des Konfigurators korrekt als JSON-Objekt `{}` ausgegeben. Nach dem Update in der Symcon-Modulverwaltung kann die Zeile „Neue LCN-Jalousie“ über „Alle erstellen“ angelegt werden.
 ## Kachel und erste Referenz
 
-Nach dem Update auf 0.1.11 die Jalousieinstanz einmal mit **Übernehmen** neu anwenden und die Kachel-Visualisierung mit `Strg + F5` neu laden. Die Instanz zeigt anschließend die korrigierte HTML-SDK-Kachel: Behang und Lamellen mit fluchtenden Dreispalten-Layouts aus runden Tasten, mittiger Grafik und rechtem Slider, ShakeFree sowie dem kompakten Laufstatus. Der Instanzname wird von Symcon selbst dargestellt und innerhalb der Kachel nicht wiederholt.
+Nach dem Update auf 0.1.11 die Jalousieinstanz einmal mit **Übernehmen** neu anwenden und die Kachel-Visualisierung mit `Strg + F5` neu laden. Die Instanz zeigt anschließend die korrigierte HTML-SDK-Kachel: Behang und Lamellen mit fluchtenden Dreispalten-Layouts aus runden Tasten, mittiger Grafik und rechtem Slider, ShakeFree nach Endlage ZU sowie dem kompakten Laufstatus. Der Instanzname wird von Symcon selbst dargestellt und innerhalb der Kachel nicht wiederholt.
 
 Solange `Position gültig` ausgeschaltet ist, sind 0 %/0 % nur Initialwerte und keine bestätigte reale Stellung. Führen Sie als ersten Abgleich im Modul eine **Referenzfahrt AUF** oder **Referenzfahrt AB** aus. Nach dem kontrollierten Fahrtende setzt das Modul 0 %/0 % beziehungsweise 100 %/100 % und schaltet `Position gültig` ein. Ist die Position noch unbekannt, behandelt das Modul den ersten Symcon-Endlagenauftrag auf 0 % oder 100 % automatisch als volle Referenzfahrt mit der maximal überwachten Fahrzeit. Die explizite Referenzfahrt ist für den Erstabgleich trotzdem am klarsten und bewusst auswählbar.
 
@@ -112,6 +113,7 @@ Solange `Position gültig` ausgeschaltet ist, sind 0 %/0 % nur Initialwerte und 
 ## Sicherheit ab Version 0.1.13
 
 - Lassen Sie **Symcon-Steuerung aktiv** während der Konfiguration ausgeschaltet, wenn die lokale LCN-Funktion zuerst allein geprüft werden soll.
-- Das Kalibrierfenster nach 100 % ZU ist standardmäßig auf 30.000 ms eingestellt.
-- ShakeFree erst nach einer vollständigen ZU-Fahrt ohne ShakeFree und einer erfolgreichen Prüfung des Kalibrierfensters aktivieren.
+- Die **Zeitverzögerung / das Kalibrierfenster nach 100 % ZU** ist standardmäßig auf 30.000 ms eingestellt und läuft auch bei ausgeschaltetem ShakeFree.
+- **ShakeFree nach Endlage ZU** erst nach einer vollständigen ZU-Fahrt ohne ShakeFree und einer erfolgreichen Prüfung dieser Zeitverzögerung aktivieren.
+- Prüfen Sie die getrennten Gesamtzeiten für AUF und ZU. Die AUF-Gesamtzeit enthält die vollständige Lamellenwendung.
 - Bei **Fehler verriegelt** greift Symcon nicht mehr ein. Bringen Sie die Jalousie lokal zum Stillstand, prüfen Sie beide Relais auf AUS und quittieren Sie erst danach.

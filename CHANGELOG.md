@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.14 – 2026-08-04
+
+- Bezeichnung in Modulmenü, Objektbaum und HTML-Kachel auf **ShakeFree nach Endlage ZU** präzisiert.
+- Das Kalibrierfenster wird zusätzlich ausdrücklich als **Zeitverzögerung nach 100 % ZU** beschrieben; es läuft nach jeder vollständigen Symcon-ZU-Fahrt unabhängig vom ShakeFree-Schalter.
+- Separate Gesamtzeiten für beide Fahrtrichtungen eingeführt, ohne bestehende Property-Werte zu verlieren:
+  - `0 % AUF → 100 % ZU`
+  - `100 % ZU → 0 % AUF` einschließlich vollständiger Lamellenwendung.
+- Positions- und Zielzeitberechnung auf richtungsabhängige Behanglaufzeiten umgestellt. Für AUF wird die Wendezeit aus der Gesamtzeit 100→0 herausgerechnet; für ZU wird die Gesamtzeit 0→100 direkt verwendet.
+- Maximalfahrzeit wird gegen die längere der beiden Richtungs-Gesamtzeiten plus Referenzreserve geprüft.
+- GT8-LANG-Zuordnung entkoppelt: Die simulierten Ausgänge 3/4 dürfen von beliebigen freien UPU stammen. Die frühere, fachlich falsche Bindung an das TS-Sendemodul wurde aus der Validierung entfernt.
+- Modulhinweis ergänzt: Der frei gewählte simulierte Ausgang muss in LCN-PRO als zweites Ziel der korrekten GT8-Taste am Haupt-UPU programmiert sein.
+- Bestehende Positionsreferenz wird beim Wechsel auf 0.1.14 vorsorglich ungültig, da frühere Zwischenpositionswerte noch aus dem symmetrischen Zeitmodell stammen können.
+- Diagnose und Repository-Prüfung an die neuen Richtungszeiten und die freie GT8-Ereignisquelle angepasst.
+
 ## 0.1.13 – 2026-08-04
 
 - Einstellbares 30-s-Kalibrierfenster nach jeder vollständig von Symcon ausgeführten ZU-Fahrt auf 100 % ergänzt. Während dieser Zeit sendet Symcon weder STOP noch einen Gegenbefehl; ShakeFree startet frühestens danach.

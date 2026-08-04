@@ -145,6 +145,48 @@ def check_lcn_connection_chain_validation() -> None:
             )
 
 
+def check_free_gt8_event_sources() -> None:
+    path = ROOT / 'LCNJalousie' / 'module.php'
+    if not path.is_file():
+        return
+    php = path.read_text(encoding='utf-8')
+    required = [
+        'Der simulierte Ausgang 3/4 darf von einem beliebigen freien UPU stammen',
+        'als zweites Ziel der korrekten GT8-Taste am Haupt-UPU',
+        'Eine Bindung an',
+        'LCNSendModuleID wäre daher fachlich falsch',
+        'findConnectedLcnModuleForVariable',
+        'GT8LongUpSourceModuleID',
+        'GT8LongDownSourceModuleID',
+    ]
+    for pattern in required:
+        if pattern not in php:
+            ERRORS.append(f'{path.relative_to(ROOT)}: free GT8 source description/logic missing ({pattern})')
+    forbidden = [
+        'Die GT8-LANG-AUF-Variable gehört nicht zur Verbindungskette des ausgewählten Sendemoduls.',
+        'Die GT8-LANG-AB-Variable gehört nicht zur Verbindungskette des ausgewählten Sendemoduls.',
+        'variableBelongsToInstanceChain($gt8Up, $sendModule)',
+        'variableBelongsToInstanceChain($gt8Down, $sendModule)',
+    ]
+    for pattern in forbidden:
+        if pattern in php:
+            ERRORS.append(f'{path.relative_to(ROOT)}: GT8 source is still incorrectly bound to send module ({pattern})')
+
+
+    controller_path = ROOT / 'LCNJalousie' / 'scripts' / 'Controller.php'
+    if controller_path.is_file():
+        controller = controller_path.read_text(encoding='utf-8')
+        for pattern in [
+            'function J_LcnModuleForVariable',
+            "J_LcnModuleForVariable(J_ConfigInt($rootID, 'GT8_LANG_AUF_ID'))",
+            "J_LcnModuleForVariable(J_ConfigInt($rootID, 'GT8_LANG_AB_ID'))",
+        ]:
+            if pattern not in controller:
+                ERRORS.append(
+                    f'{controller_path.relative_to(ROOT)}: arbitrary GT8 source module must participate in status synchronization ({pattern})'
+                )
+
+
 def check_native_shutter_visualization() -> None:
     module_path = ROOT / 'LCNJalousie' / 'module.php'
     controller_path = ROOT / 'LCNJalousie' / 'scripts' / 'Controller.php'
@@ -311,8 +353,11 @@ def check_measured_blind_start_model() -> None:
         "'Sanftanlauf_ms' => ['SoftStartMs', 1]",
         "['Sanftanlauf_ms', 'Sanftanlauf Zwischenposition [ms]'",
         'invalidateReferenceAfterModelUpdate',
-        "version_compare($previousVersion, '0.1.7', '>=')",
+        "version_compare($previousVersion, '0.1.14', '>=')",
         "SetValueBoolean((int) $referencedID, false)",
+        "Gesamtlaufzeit 100 % ZU → 0 % AUF",
+        "Gesamtlaufzeit 0 % AUF → 100 % ZU",
+        "ShakeFree nach Endlage ZU",
     ]
     for pattern in required_module:
         if pattern not in module:
@@ -325,6 +370,9 @@ def check_measured_blind_start_model() -> None:
         'if ($direction === J_DIR_UP && $startBlind >= 100.0 - $positionTolerance)',
         'return max($softStartMs, J_SlatTurnTimeMs($rootID, $startSlat, $direction));',
         '$blindStartDelay = J_BlindStartDelayMs',
+        'function J_DirectionalBlindTravelMs',
+        "J_ConfigInt($rootID, 'Gesamtlaufzeit_ms')",
+        "J_ConfigInt($rootID, 'Behanglaufzeit_ms')",
     ]
     for pattern in required_controller:
         if pattern not in controller:
@@ -335,6 +383,7 @@ def check_measured_blind_start_model() -> None:
         'function JW_BlindStartDelayMs',
         "'Sanftanlauf_ms'",
         '$blindStartDelay = JW_BlindStartDelayMs',
+        'function JW_DirectionalBlindTravelMs',
     ]
     for pattern in required_worker:
         if pattern not in worker:
@@ -349,7 +398,10 @@ def check_measured_blind_start_model() -> None:
 def check_timing_examples() -> None:
     turn_ms = 6500.0
     soft_ms = 6000.0
-    blind_ms = 175500.0
+    total_up_ms = 182000.0
+    total_down_ms = 175500.0
+    blind_up_ms = total_up_ms - turn_ms
+    blind_down_ms = total_down_ms
     tolerance = 0.5
 
     def slat_turn(start_slat: float, direction: int) -> float:
@@ -363,21 +415,21 @@ def check_timing_examples() -> None:
         return max(soft_ms, slat_turn(start_slat, direction))
 
     examples = [
-        ('oben nach AB', delay(0.0, 0.0, 2), 0.0),
+        ('oben nach ZU', delay(0.0, 0.0, 2), 0.0),
         ('unten nach AUF', delay(100.0, 100.0, 1), 6500.0),
-        ('Mitte gleiche Richtung AB', delay(50.0, 100.0, 2), 6000.0),
+        ('Mitte gleiche Richtung ZU', delay(50.0, 100.0, 2), 6000.0),
         ('Mitte gleiche Richtung AUF', delay(50.0, 0.0, 1), 6000.0),
-        ('Mitte Gegenrichtung AB', delay(50.0, 0.0, 2), 6500.0),
+        ('Mitte Gegenrichtung ZU', delay(50.0, 0.0, 2), 6500.0),
         ('Mitte Gegenrichtung AUF', delay(50.0, 100.0, 1), 6500.0),
     ]
     for name, actual, expected in examples:
         if actual != expected:
             ERRORS.append(f'timing model {name}: expected {expected}, got {actual}')
 
-    if 0.0 + blind_ms != 175500.0:
-        ERRORS.append('timing model top-to-bottom full travel must be 175500 ms before reserve')
-    if turn_ms + blind_ms != 182000.0:
-        ERRORS.append('timing model bottom-to-top full travel must be 182000 ms before reserve')
+    if blind_down_ms != 175500.0:
+        ERRORS.append('directional timing: 0-to-100 ZU blind travel must use configured down total')
+    if turn_ms + blind_up_ms != total_up_ms:
+        ERRORS.append('directional timing: 100-to-0 AUF total must include full turn time')
 
 
 
@@ -406,7 +458,7 @@ def check_calibration_window_and_fault_latch() -> None:
         "private const STATUS_FAULT_LATCHED = 212",
         "$this->SetStatus(104)",
         "$this->setRuntimeEnabled(false",
-        "['Kalibrierfenster_ms', 'Kalibrierfenster vor ShakeFree [ms]'",
+        "['Kalibrierfenster_ms', 'Zeitverzögerung / Kalibrierfenster nach 100 % ZU [ms]'",
         "'Kalibrierfenster_ms' => ['CalibrationWindowMs', 1]",
         "['Modul_Aktiv', 'Symcon-Steuerung aktiv'",
         "'Modul_Aktiv' => ['ModuleEnabled', 0]",
@@ -423,7 +475,7 @@ def check_calibration_window_and_fault_latch() -> None:
         "LCNJAL_IsRuntimePermitted($rootID)",
         "J_ConfigInt($rootID, 'Kalibrierfenster_ms')",
         "SetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase'), J_PHASE_CALIBRATION)",
-        "100 % ZU erreicht; Kalibrierfenster gestartet",
+        "100 % ZU erreicht; Zeitverzoegerung/Kalibrierfenster gestartet",
         "if ($phase === J_PHASE_CALIBRATION)",
         "LCNJAL_LatchFault($rootID, $message)",
         "Symcon-Instanz sofort",
@@ -448,14 +500,14 @@ def check_calibration_window_and_fault_latch() -> None:
         if pattern not in html:
             ERRORS.append(f'{html_path.relative_to(ROOT)}: inactive/fault tile state missing ({pattern})')
 
-    for pattern in ["'Kalibrierfenster_ms' => 1", "Kalibrierfenster_ms muss zwischen 30000 und 120000 ms", "'Modul_Aktiv' => 0", "'Fehler_Verriegelt' => 0"]:
+    for pattern in ["'Kalibrierfenster_ms' => 1", "Zeitverzoegerung/Kalibrierfenster_ms muss zwischen 30000 und 120000 ms", "'Modul_Aktiv' => 0", "'Fehler_Verriegelt' => 0"]:
         if pattern not in diagnose:
             ERRORS.append(f'{diagnose_path.relative_to(ROOT)}: diagnostics missing ({pattern})')
 
     # The 30-second window is deliberately additional to MaxFahrt: MaxFahrt
     # monitors the mechanical travel, while the output remains energized for
     # the manufacturer's potential calibration routine.
-    if "GetValueBoolean(J_ID($rootID, '03_Bedienung', 'ShakeFree_Aktiv'))" in controller.split("100 % ZU erreicht; Kalibrierfenster gestartet", 1)[0].split('function J_HandleDeadline', 1)[-1]:
+    if "GetValueBoolean(J_ID($rootID, '03_Bedienung', 'ShakeFree_Aktiv'))" in controller.split("100 % ZU erreicht; Zeitverzoegerung/Kalibrierfenster gestartet", 1)[0].split('function J_HandleDeadline', 1)[-1]:
         ERRORS.append(f'{controller_path.relative_to(ROOT)}: calibration window must run after every complete close, not only when ShakeFree is enabled')
 
 
@@ -467,6 +519,7 @@ def main() -> int:
     check_metadata()
     check_configurator_configuration_object()
     check_lcn_connection_chain_validation()
+    check_free_gt8_event_sources()
     check_native_shutter_visualization()
     check_custom_html_tile()
     check_javascript()

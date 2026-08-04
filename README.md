@@ -32,9 +32,13 @@ SymconLCNJalousie/
 - Symcon 9.0
 - eingerichtete LCN-Verbindung in Symcon
 - vorhandene LCN-Modulinstanzen für Sendemodul und Aktor
-- vier echte Boolean-Statusvariablen: Relais AUF, Relais AB, GT8 LANG AUF, GT8 LANG AB
+- vier echte Boolean-Statusvariablen: Relais AUF, Relais ZU, GT8 LANG AUF, GT8 LANG ZU. Die GT8-LANG-Variablen dürfen von beliebigen freien UPU-Ausgängen 3/4 stammen.
 - geprüfte LCN-PRO-Verriegelung
 - mit PCHK/LCN-Busmonitor bestätigte TS-Datenfelder
+
+### Freie Wahl der simulierten GT8-LANG-Ausgänge
+
+Die Statusvariablen für GT8 LANG AUF/ZU müssen nicht vom Haupt-UPU des GT8, vom TS-Sendemodul oder vom Relaisaktor stammen. Ausgang 3 beziehungsweise 4 darf auf einem beliebigen freien LCN-UPU liegen. Entscheidend ist die LCN-PRO-Programmierung: Der fremde simulierte Ausgang muss als **zweites Ziel der korrekten GT8-Taste am Haupt-UPU** eingetragen sein. Das Modul prüft deshalb nur Variablentyp und Eindeutigkeit, nicht die Zugehörigkeit zum TS-Sendemodul.
 
 ## Installation
 
@@ -53,14 +57,14 @@ Eine ausführliche Anleitung steht in [ERSTE_SCHRITTE.md](ERSTE_SCHRITTE.md).
 
 ## Entwicklungsstand
 
-**0.1.13 – öffentliche Beta.** Der Runtime-Kern basiert auf der tiefengeprüften V11.3-Skriptfassung. Das Modul automatisiert deren Aufbau und Konfiguration. Vor einem produktiven Motorbetrieb bleiben reale Tests mit Symcon 9.0, PCHK/PCK, LCN-Bus, Relais, Motor und Endlagen zwingend.
+**0.1.14 – öffentliche Beta.** Der Runtime-Kern basiert auf der tiefengeprüften V11.3-Skriptfassung. Das Modul automatisiert deren Aufbau und Konfiguration. Vor einem produktiven Motorbetrieb bleiben reale Tests mit Symcon 9.0, PCHK/PCK, LCN-Bus, Relais, Motor und Endlagen zwingend.
 
 ## Lizenz
 
 MIT – siehe [LICENSE](LICENSE).
 ## Eigene Symcon-Kachel und Referenzierung
 
-Ab Version 0.1.11 nutzt die Geräteinstanz das offizielle Symcon HTML-SDK für eine eigene, interaktive Jalousiekachel. Behang und Lamellen sind identisch aufgebaut: links drei gleich große runde Tasten, mittig eine dynamische grafische Statusanzeige und rechts ein vertikaler Slider. Beim Behang lauten die Tasten `AUF`, `STOP`, `ZU`; bei den Lamellen `AUF`, `MITTE`, `ZU`. Beide Slider zeigen 0 % oben und 100 % unten. Der kompakte Laufstatus und der ShakeFree-Schalter bleiben sichtbar. Der optische Tastenkranz kennzeichnet nur einen laufenden Auftrag und verschwindet nach dessen Abschluss automatisch. Die Kachel verwendet Symcon-Icons über `/icons.js`, übernimmt Akzent-, Text- und Kartenfarbe direkt aus der geöffneten Symcon-Visualisierung und sendet Benutzeraktionen ausschließlich über `requestAction()` an die Modulinstanz.
+Ab Version 0.1.11 nutzt die Geräteinstanz das offizielle Symcon HTML-SDK für eine eigene, interaktive Jalousiekachel. Behang und Lamellen sind identisch aufgebaut: links drei gleich große runde Tasten, mittig eine dynamische grafische Statusanzeige und rechts ein vertikaler Slider. Beim Behang lauten die Tasten `AUF`, `STOP`, `ZU`; bei den Lamellen `AUF`, `MITTE`, `ZU`. Beide Slider zeigen 0 % oben und 100 % unten. Der kompakte Laufstatus und der Schalter **ShakeFree nach Endlage ZU** bleiben sichtbar. Der optische Tastenkranz kennzeichnet nur einen laufenden Auftrag und verschwindet nach dessen Abschluss automatisch. Die Kachel verwendet Symcon-Icons über `/icons.js`, übernimmt Akzent-, Text- und Kartenfarbe direkt aus der geöffneten Symcon-Visualisierung und sendet Benutzeraktionen ausschließlich über `requestAction()` an die Modulinstanz.
 
 Die direkten Statusvariablen `Position`, `Drehgrad` und `Position gültig` bleiben erhalten, damit die Werte auch in der Listenansicht und für Automationen verfügbar sind. `Position` verwendet 0 % = vollständig offen und 100 % = vollständig geschlossen; `Drehgrad` verwendet 0 % in AUF-Richtung und 100 % in AB-Richtung.
 
@@ -78,6 +82,15 @@ Die HTML-Kachel übernimmt Akzent-, Text- und Kartenfarbe direkt aus `--accent-c
 
 Ab Version 0.1.13 besitzt jede Instanz die Eigenschaft **Symcon-Steuerung aktiv**. Wird sie ausgeschaltet, deaktiviert das Modul seine Ereignisse und Timer und sendet keine LCN-Befehle; die lokale LCN-Bedienung bleibt verfügbar.
 
-Nach einer vollständig von Symcon ausgeführten ZU-Fahrt auf 100 % bleibt die ZU-Ansteuerung für das eingestellte **Kalibrierfenster** (Vorgabe 30 Sekunden) unverändert aktiv. Währenddessen sendet Symcon keinen automatischen STOP und keinen Gegenbefehl. Erst nach Ablauf wird die ZU-Ansteuerung beendet. Ist ShakeFree weiterhin eingeschaltet, folgt die Gegenfahrt erst danach. Damit erhält eine im Antrieb autonom gestartete Endlagen-/Seilspannungsprüfung ein ungestörtes Zeitfenster.
+Nach einer vollständig von Symcon ausgeführten ZU-Fahrt auf 100 % bleibt die ZU-Ansteuerung für die eingestellte **Zeitverzögerung / das Kalibrierfenster** (Vorgabe 30 Sekunden) unverändert aktiv. Währenddessen sendet Symcon keinen automatischen STOP und keinen Gegenbefehl. Erst nach Ablauf wird die ZU-Ansteuerung beendet. Ist **ShakeFree nach Endlage ZU** eingeschaltet, folgt die Gegenfahrt erst danach. Die Zeitverzögerung läuft auch bei ausgeschaltetem ShakeFree und gibt einer im Antrieb autonom gestarteten Endlagen-/Seilspannungsprüfung ein ungestörtes Zeitfenster.
+
+## Richtungsabhängige Laufzeiten
+
+Die beiden vollständigen Fahrtrichtungen werden getrennt konfiguriert:
+
+- **Gesamtlaufzeit 0 % AUF → 100 % ZU**: vollständige Schließfahrt ab oberer Endlage.
+- **Gesamtlaufzeit 100 % ZU → 0 % AUF**: vollständige Öffnungsfahrt einschließlich der vollen Lamellenwendung.
+
+Für Zwischenpositionen leitet das Modul daraus zwei unterschiedliche Behanggeschwindigkeiten ab. In Richtung AUF wird die volle Wendezeit von der konfigurierten Gesamtzeit 100→0 abgezogen; in Richtung ZU wird die konfigurierte Gesamtzeit 0→100 direkt als reine Behanglaufzeit verwendet. Sanftanlauf und Rest-Wendezeit werden anschließend abhängig vom tatsächlichen Startzustand zusätzlich berücksichtigt.
 
 Bei einem Laufzeit- oder Aufbaufehler verriegelt sich die Instanz. Alle Modulereignisse und Timer werden deaktiviert und es werden keine weiteren LCN-Befehle gesendet. Die lokale LCN-Steuerung bleibt frei. Eine Quittierung ist erst möglich, wenn beide realen Relais AUS melden; die Quittierung selbst sendet keinen Motorbefehl und macht die Positionsreferenz vorsorglich ungültig.

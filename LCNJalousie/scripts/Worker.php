@@ -175,6 +175,19 @@ function JW_BlindStartDelayMs(int $rootID, float $startBlind, float $startSlat, 
     return max($softStartMs, JW_SlatTurnTimeMs($startSlat, $state, $turnMs));
 }
 
+function JW_DirectionalBlindTravelMs(int $rootID, int $state, float $turnMs): float
+{
+    $totalUpMs = (float) GetValueInteger(JW_ID($rootID, '01_Konfiguration', 'Gesamtlaufzeit_ms'));
+    $totalDownMs = (float) GetValueInteger(JW_ID($rootID, '01_Konfiguration', 'Behanglaufzeit_ms'));
+
+    // Kompatible Konfigurations-Idents:
+    // Gesamtlaufzeit_ms = Gesamtzeit 100 % ZU -> 0 % AUF inkl. voller Wendezeit.
+    // Behanglaufzeit_ms = Gesamtzeit 0 % AUF -> 100 % ZU.
+    return $state === 1
+        ? $totalUpMs - $turnMs
+        : $totalDownMs;
+}
+
 function JW_UpdatePosition(int $rootID, int $state, float $now): void
 {
     $startMs = GetValueFloat(JW_ID($rootID, '05_Intern', 'Startzeit_ms'));
@@ -186,7 +199,7 @@ function JW_UpdatePosition(int $rootID, int $state, float $now): void
     $startBlind = GetValueFloat(JW_ID($rootID, '05_Intern', 'Start_Behang'));
     $startSlat = GetValueFloat(JW_ID($rootID, '05_Intern', 'Start_Lamelle'));
     $turnMs = (float) GetValueInteger(JW_ID($rootID, '01_Konfiguration', 'Wendezeit_ms'));
-    $blindTravelMs = (float) GetValueInteger(JW_ID($rootID, '01_Konfiguration', 'Behanglaufzeit_ms'));
+    $blindTravelMs = JW_DirectionalBlindTravelMs($rootID, $state, $turnMs);
     if ($turnMs <= 0.0 || $blindTravelMs <= 0.0) {
         return;
     }

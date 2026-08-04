@@ -11,7 +11,7 @@ declare(strict_types=1);
  */
 class LCNJalousie extends IPSModuleStrict
 {
-    private const VERSION = '0.1.13';
+    private const VERSION = '0.1.14';
     private const EXECUTE_PARENT_ACTION = '{7938A5A2-0981-5FE0-BE6C-8AA610D654EB}';
 
     private const STATUS_ACTIVE = 102;
@@ -47,6 +47,9 @@ class LCNJalousie extends IPSModuleStrict
         $this->RegisterPropertyString('TSShortDown', 'K---00000100');
         $this->RegisterPropertyBoolean('TSMappingConfirmed', false);
 
+        // Aus Kompatibilitätsgründen bleiben die Property-Namen erhalten:
+        // TotalTravelMs = Gesamtzeit 100 % ZU -> 0 % AUF inkl. voller Wendezeit.
+        // BlindTravelMs = Gesamtzeit 0 % AUF -> 100 % ZU.
         $this->RegisterPropertyInteger('TotalTravelMs', 182000);
         $this->RegisterPropertyInteger('TurnMs', 6500);
         $this->RegisterPropertyInteger('SoftStartMs', 6000);
@@ -187,12 +190,13 @@ class LCNJalousie extends IPSModuleStrict
                     'expanded' => true,
                     'items' => [
                         ['type' => 'Label', 'caption' => 'Wählen Sie vorhandene LCN-Objekte aus. Das Modul legt keine LCN-Verbindung und keine LCN-PRO-Programmierung an.'],
-                        ['type' => 'SelectInstance', 'name' => 'LCNSendModuleID', 'caption' => 'LCN-Sendemodul für virtuelle Tasten (z. B. M22)'],
+                        ['type' => 'SelectInstance', 'name' => 'LCNSendModuleID', 'caption' => 'LCN-Sendemodul für virtuelle TS-Tasten (Haupt-UPU des GT8, z. B. M22)'],
                         ['type' => 'SelectInstance', 'name' => 'LCNActorModuleID', 'caption' => 'LCN-Aktormodul mit Motorrelais (z. B. M93)'],
                         ['type' => 'SelectVariable', 'name' => 'RelayUpVariableID', 'caption' => 'Reale Relaisstatusvariable AUF', 'validVariableTypes' => [0]],
-                        ['type' => 'SelectVariable', 'name' => 'RelayDownVariableID', 'caption' => 'Reale Relaisstatusvariable AB', 'validVariableTypes' => [0]],
-                        ['type' => 'SelectVariable', 'name' => 'GT8LongUpVariableID', 'caption' => 'GT8 LANG AUF – simulierter Ausgang 3', 'validVariableTypes' => [0]],
-                        ['type' => 'SelectVariable', 'name' => 'GT8LongDownVariableID', 'caption' => 'GT8 LANG AB – simulierter Ausgang 4', 'validVariableTypes' => [0]],
+                        ['type' => 'SelectVariable', 'name' => 'RelayDownVariableID', 'caption' => 'Reale Relaisstatusvariable ZU', 'validVariableTypes' => [0]],
+                        ['type' => 'Label', 'caption' => 'GT8-LANG: Der simulierte Ausgang 3/4 darf von einem beliebigen freien UPU stammen. Er muss nicht zum Haupt-UPU, Sendemodul oder Aktormodul gehören. In LCN-PRO muss der ausgewählte Ausgang jedoch als zweites Ziel der korrekten GT8-Taste am Haupt-UPU programmiert sein.'],
+                        ['type' => 'SelectVariable', 'name' => 'GT8LongUpVariableID', 'caption' => 'GT8 LANG AUF – Status eines frei wählbaren simulierten Ausgangs 3', 'validVariableTypes' => [0]],
+                        ['type' => 'SelectVariable', 'name' => 'GT8LongDownVariableID', 'caption' => 'GT8 LANG ZU – Status eines frei wählbaren simulierten Ausgangs 4', 'validVariableTypes' => [0]],
                     ],
                 ],
                 [
@@ -201,7 +205,7 @@ class LCNJalousie extends IPSModuleStrict
                     'expanded' => true,
                     'items' => [
                         ['type' => 'ValidationTextBox', 'name' => 'TSShortUp', 'caption' => 'TS-Datenfeld KURZ AUF', 'validate' => '^[K-]{4}[01]{8}$'],
-                        ['type' => 'ValidationTextBox', 'name' => 'TSShortDown', 'caption' => 'TS-Datenfeld KURZ AB', 'validate' => '^[K-]{4}[01]{8}$'],
+                        ['type' => 'ValidationTextBox', 'name' => 'TSShortDown', 'caption' => 'TS-Datenfeld KURZ ZU', 'validate' => '^[K-]{4}[01]{8}$'],
                         ['type' => 'CheckBox', 'name' => 'TSMappingConfirmed', 'caption' => 'Ich habe beide TS-Datenfelder mit LCN-PRO/PCHK-Busmonitor bestätigt'],
                     ],
                 ],
@@ -210,19 +214,20 @@ class LCNJalousie extends IPSModuleStrict
                     'caption' => '4. Laufzeiten',
                     'expanded' => false,
                     'items' => [
-                        ['type' => 'NumberSpinner', 'name' => 'TotalTravelMs', 'caption' => 'Gesamtlaufzeit AB-Endlage → AUF-Endlage', 'suffix' => ' ms', 'minimum' => 1000],
+                        ['type' => 'NumberSpinner', 'name' => 'TotalTravelMs', 'caption' => 'Gesamtlaufzeit 100 % ZU → 0 % AUF (inkl. vollständiger Lamellenwendung)', 'suffix' => ' ms', 'minimum' => 1000],
+                        ['type' => 'NumberSpinner', 'name' => 'BlindTravelMs', 'caption' => 'Gesamtlaufzeit 0 % AUF → 100 % ZU', 'suffix' => ' ms', 'minimum' => 1000],
                         ['type' => 'NumberSpinner', 'name' => 'TurnMs', 'caption' => 'Volle Wendezeit / Richtungswechsel', 'suffix' => ' ms', 'minimum' => 100],
                         ['type' => 'NumberSpinner', 'name' => 'SoftStartMs', 'caption' => 'Sanftanlauf aus Zwischenposition bei gleicher Richtung', 'suffix' => ' ms', 'minimum' => 0],
-                        ['type' => 'NumberSpinner', 'name' => 'BlindTravelMs', 'caption' => 'Reine Behanglaufzeit 0–100 %', 'suffix' => ' ms', 'minimum' => 1000],
                         ['type' => 'NumberSpinner', 'name' => 'ReferenceReserveMs', 'caption' => 'Referenzreserve', 'suffix' => ' ms', 'minimum' => 0],
                         ['type' => 'NumberSpinner', 'name' => 'MaxTravelMs', 'caption' => 'Maximale überwachte Fahrt', 'suffix' => ' ms', 'minimum' => 1000],
-                        ['type' => 'NumberSpinner', 'name' => 'ShakeFreeMs', 'caption' => 'ShakeFree-Gegenfahrt', 'suffix' => ' ms', 'minimum' => 100],
-                        ['type' => 'NumberSpinner', 'name' => 'ShakeFreePauseMs', 'caption' => 'Umschaltpause vor ShakeFree-Gegenfahrt', 'suffix' => ' ms', 'minimum' => 0, 'maximum' => 3000],
-                        ['type' => 'NumberSpinner', 'name' => 'CalibrationWindowMs', 'caption' => 'Kalibrierfenster nach 100 % ZU vor ShakeFree', 'suffix' => ' ms', 'minimum' => 30000, 'maximum' => 120000],
+                        ['type' => 'NumberSpinner', 'name' => 'ShakeFreeMs', 'caption' => 'ShakeFree nach Endlage ZU – Gegenfahrt', 'suffix' => ' ms', 'minimum' => 100],
+                        ['type' => 'NumberSpinner', 'name' => 'ShakeFreePauseMs', 'caption' => 'Umschaltpause vor ShakeFree nach Endlage ZU', 'suffix' => ' ms', 'minimum' => 0, 'maximum' => 3000],
+                        ['type' => 'NumberSpinner', 'name' => 'CalibrationWindowMs', 'caption' => 'Zeitverzögerung / Kalibrierfenster nach 100 % ZU vor STOP und ShakeFree', 'suffix' => ' ms', 'minimum' => 30000, 'maximum' => 120000],
                         ['type' => 'NumberSpinner', 'name' => 'PositionTolerance', 'caption' => 'Positionstoleranz', 'suffix' => ' %', 'digits' => 1, 'minimum' => 0.1, 'maximum' => 10],
                         ['type' => 'NumberSpinner', 'name' => 'SlatTolerance', 'caption' => 'Lamellentoleranz', 'suffix' => ' %', 'digits' => 1, 'minimum' => 0.1, 'maximum' => 10],
-                        ['type' => 'Label', 'caption' => 'Bewegungsmodell: 0 % → AB ohne Vorlauf; 100 % → AUF mit voller Wendezeit; Zwischenposition gleiche Richtung mit Sanftanlauf; Gegenrichtung mit dem längeren Wert aus Sanftanlauf und Rest-Wendezeit.'],
-                        ['type' => 'Label', 'caption' => 'Nach jeder vollständigen ZU-Fahrt bleibt das AB-Relais für das Kalibrierfenster unverändert aktiv; Symcon sendet in dieser Zeit keinen STOP und keinen Gegenbefehl. ShakeFree startet – sofern aktiviert – erst danach.'],
+                        ['type' => 'Label', 'caption' => 'Richtungsabhängige Positionsrechnung: Für AUF wird aus der Gesamtzeit 100→0 die volle Wendezeit abgezogen; für ZU wird die Gesamtzeit 0→100 direkt als Behanglaufzeit verwendet.'],
+                        ['type' => 'Label', 'caption' => 'Bewegungsmodell: 0 % → ZU ohne Vorlauf; 100 % → AUF mit voller Wendezeit; Zwischenposition gleiche Richtung mit Sanftanlauf; Gegenrichtung mit dem längeren Wert aus Sanftanlauf und Rest-Wendezeit.'],
+                        ['type' => 'Label', 'caption' => 'Die Zeitverzögerung / das Kalibrierfenster läuft nach jeder vollständig von Symcon ausgeführten Fahrt auf 100 % ZU – unabhängig davon, ob ShakeFree aktiviert ist. Währenddessen sendet Symcon keinen STOP und keinen Gegenbefehl. ShakeFree nach Endlage ZU startet – sofern aktiviert – erst nach Ablauf dieser Verzögerung.'],
                     ],
                 ],
                 [
@@ -258,7 +263,7 @@ class LCNJalousie extends IPSModuleStrict
                 ['code' => self::STATUS_ACTOR_MODULE_MISSING, 'icon' => 'error', 'caption' => 'LCN-Aktormodul fehlt oder ist ungültig'],
                 ['code' => self::STATUS_RELAY_UP_INVALID, 'icon' => 'error', 'caption' => 'Relaisstatus AUF fehlt, ist nicht Boolean oder ist nicht mit dem Aktormodul verbunden'],
                 ['code' => self::STATUS_RELAY_DOWN_INVALID, 'icon' => 'error', 'caption' => 'Relaisstatus AB fehlt, ist nicht Boolean oder ist nicht mit dem Aktormodul verbunden'],
-                ['code' => self::STATUS_GT8_INVALID, 'icon' => 'error', 'caption' => 'GT8-LANG-Variablen fehlen, sind nicht Boolean oder sind nicht mit dem Sendemodul verbunden'],
+                ['code' => self::STATUS_GT8_INVALID, 'icon' => 'error', 'caption' => 'GT8-LANG-Variablen fehlen oder sind nicht Boolean'],
                 ['code' => self::STATUS_DUPLICATE_OBJECTS, 'icon' => 'error', 'caption' => 'AUF/AB-Zuordnungen sind identisch'],
                 ['code' => self::STATUS_TS_INVALID, 'icon' => 'error', 'caption' => 'TS-Datenfelder ungültig oder noch nicht bestätigt'],
                 ['code' => self::STATUS_TIMING_INVALID, 'icon' => 'error', 'caption' => 'Zeitparameter sind widersprüchlich'],
@@ -520,8 +525,15 @@ class LCNJalousie extends IPSModuleStrict
         if (!IPS_FunctionExists('LCN_RequestStatus')) {
             throw new RuntimeException('LCN_RequestStatus ist in dieser Symcon-Installation nicht verfügbar.');
         }
-        foreach ([$this->ReadPropertyInteger('LCNSendModuleID'), $this->ReadPropertyInteger('LCNActorModuleID')] as $moduleID) {
-            if ($moduleID > 0 && IPS_InstanceExists($moduleID)) {
+        $moduleIDs = array_values(array_unique(array_filter([
+            $this->ReadPropertyInteger('LCNSendModuleID'),
+            $this->ReadPropertyInteger('LCNActorModuleID'),
+            $this->findConnectedLcnModuleForVariable($this->ReadPropertyInteger('GT8LongUpVariableID')),
+            $this->findConnectedLcnModuleForVariable($this->ReadPropertyInteger('GT8LongDownVariableID')),
+        ], static fn (int $id): bool => $id > 0)));
+
+        foreach ($moduleIDs as $moduleID) {
+            if (IPS_InstanceExists($moduleID)) {
                 LCN_RequestStatus($moduleID);
             }
         }
@@ -541,13 +553,17 @@ class LCNJalousie extends IPSModuleStrict
                 'ModuleEnabled' => $this->ReadPropertyBoolean('ModuleEnabled'),
                 'FaultLatched' => $this->ReadAttributeBoolean('FaultLatched'),
                 'FaultMessage' => $this->ReadAttributeString('FaultMessage'),
-                'CalibrationWindowMs' => $this->ReadPropertyInteger('CalibrationWindowMs'),
+                'TotalTravelUpMs_100_to_0' => $this->ReadPropertyInteger('TotalTravelMs'),
+                'TotalTravelDownMs_0_to_100' => $this->ReadPropertyInteger('BlindTravelMs'),
+                'CalibrationDelayMs' => $this->ReadPropertyInteger('CalibrationWindowMs'),
                 'LCNSendModuleID' => $this->ReadPropertyInteger('LCNSendModuleID'),
                 'LCNActorModuleID' => $this->ReadPropertyInteger('LCNActorModuleID'),
                 'RelayUpVariableID' => $this->ReadPropertyInteger('RelayUpVariableID'),
                 'RelayDownVariableID' => $this->ReadPropertyInteger('RelayDownVariableID'),
                 'GT8LongUpVariableID' => $this->ReadPropertyInteger('GT8LongUpVariableID'),
                 'GT8LongDownVariableID' => $this->ReadPropertyInteger('GT8LongDownVariableID'),
+                'GT8LongUpSourceModuleID' => $this->findConnectedLcnModuleForVariable($this->ReadPropertyInteger('GT8LongUpVariableID')),
+                'GT8LongDownSourceModuleID' => $this->findConnectedLcnModuleForVariable($this->ReadPropertyInteger('GT8LongDownVariableID')),
                 'TSMappingConfirmed' => $this->ReadPropertyBoolean('TSMappingConfirmed'),
             ],
             'validation' => $validation,
@@ -766,7 +782,7 @@ class LCNJalousie extends IPSModuleStrict
             }
         }
         if (!$this->isBooleanVariable($relayDown)) {
-            $messages[] = 'Reale Relaisstatusvariable AB auswählen.';
+            $messages[] = 'Reale Relaisstatusvariable ZU auswählen.';
             if ($status === self::STATUS_ACTIVE) {
                 $status = self::STATUS_RELAY_DOWN_INVALID;
             }
@@ -796,14 +812,20 @@ class LCNJalousie extends IPSModuleStrict
                 $status = self::STATUS_RELAY_DOWN_INVALID;
             }
         }
-        if ($this->isBooleanVariable($gt8Up) && $sendModule > 0 && !$this->variableBelongsToInstanceChain($gt8Up, $sendModule)) {
-            $messages[] = 'Die GT8-LANG-AUF-Variable gehört nicht zur Verbindungskette des ausgewählten Sendemoduls.';
+        // Die beiden GT8-LANG-Ereignisvariablen dürfen von beliebigen freien
+        // LCN-UPU stammen. Entscheidend ist ausschließlich, dass in LCN-PRO
+        // der jeweilige simulierte Ausgang als zweites Ziel der korrekten
+        // GT8-Taste am Haupt-UPU programmiert ist. Eine Bindung an
+        // LCNSendModuleID wäre daher fachlich falsch.
+
+        if ($this->isBooleanVariable($gt8Up) && $this->findConnectedLcnModuleForVariable($gt8Up) <= 0) {
+            $messages[] = 'GT8 LANG AUF ist mit keiner aktiven LCN-Modulinstanz verbunden.';
             if ($status === self::STATUS_ACTIVE) {
                 $status = self::STATUS_GT8_INVALID;
             }
         }
-        if ($this->isBooleanVariable($gt8Down) && $sendModule > 0 && !$this->variableBelongsToInstanceChain($gt8Down, $sendModule)) {
-            $messages[] = 'Die GT8-LANG-AB-Variable gehört nicht zur Verbindungskette des ausgewählten Sendemoduls.';
+        if ($this->isBooleanVariable($gt8Down) && $this->findConnectedLcnModuleForVariable($gt8Down) <= 0) {
+            $messages[] = 'GT8 LANG ZU ist mit keiner aktiven LCN-Modulinstanz verbunden.';
             if ($status === self::STATUS_ACTIVE) {
                 $status = self::STATUS_GT8_INVALID;
             }
@@ -825,17 +847,19 @@ class LCNJalousie extends IPSModuleStrict
             }
         }
 
-        $total = $this->ReadPropertyInteger('TotalTravelMs');
+        $totalUp = $this->ReadPropertyInteger('TotalTravelMs');
+        $totalDown = $this->ReadPropertyInteger('BlindTravelMs');
         $turn = $this->ReadPropertyInteger('TurnMs');
         $softStart = $this->ReadPropertyInteger('SoftStartMs');
-        $blind = $this->ReadPropertyInteger('BlindTravelMs');
         $reserve = $this->ReadPropertyInteger('ReferenceReserveMs');
         $max = $this->ReadPropertyInteger('MaxTravelMs');
         $window = $this->ReadPropertyInteger('WorkerWindowMs');
         $shakePause = $this->ReadPropertyInteger('ShakeFreePauseMs');
         $calibrationWindow = $this->ReadPropertyInteger('CalibrationWindowMs');
-        if ($total <= 0 || $turn <= 0 || $softStart < 0 || $softStart > $turn || $blind <= 0 || $turn + $blind !== $total || $max < $total + $reserve || $window < 1000 || $window > 3000 || $shakePause < 0 || $shakePause > 3000 || $calibrationWindow < 30000 || $calibrationWindow > 120000) {
-            $messages[] = 'Zeitparameter sind widersprüchlich: Gesamtlaufzeit AB→AUF = Wendezeit + Behanglaufzeit; 0 ≤ Sanftanlauf ≤ Wendezeit; MaxFahrt mindestens Gesamtlaufzeit + Reserve; Workerfenster 1000…3000 ms; ShakeFree-Umschaltpause 0…3000 ms; Kalibrierfenster 30000…120000 ms.';
+        $blindUp = $totalUp - $turn;
+        $blindDown = $totalDown;
+        if ($totalUp <= $turn || $totalDown <= 0 || $turn <= 0 || $softStart < 0 || $softStart > $turn || $blindUp <= 0 || $blindDown <= 0 || $max < max($totalUp, $totalDown) + $reserve || $window < 1000 || $window > 3000 || $shakePause < 0 || $shakePause > 3000 || $calibrationWindow < 30000 || $calibrationWindow > 120000) {
+            $messages[] = 'Zeitparameter sind widersprüchlich: Gesamtzeit 100→0 muss größer als die Wendezeit sein; Gesamtzeit 0→100 muss positiv sein; 0 ≤ Sanftanlauf ≤ Wendezeit; MaxFahrt mindestens längere Richtungs-Gesamtzeit + Reserve; Workerfenster 1000…3000 ms; ShakeFree-Umschaltpause 0…3000 ms; Zeitverzögerung/Kalibrierfenster 30000…120000 ms.';
             if ($status === self::STATUS_ACTIVE) {
                 $status = self::STATUS_TIMING_INVALID;
             }
@@ -920,6 +944,46 @@ class LCNJalousie extends IPSModuleStrict
         return false;
     }
 
+    private function findConnectedLcnModuleForVariable(int $variableID): int
+    {
+        if (!IPS_VariableExists($variableID)) {
+            return 0;
+        }
+
+        $currentObjectID = IPS_GetParent($variableID);
+        $logicalVisited = [];
+
+        for ($logicalGuard = 0; $logicalGuard < 32 && $currentObjectID > 0; $logicalGuard++) {
+            if (isset($logicalVisited[$currentObjectID])) {
+                break;
+            }
+            $logicalVisited[$currentObjectID] = true;
+
+            if (IPS_InstanceExists($currentObjectID)) {
+                $currentInstanceID = $currentObjectID;
+                $connectionVisited = [];
+
+                for ($connectionGuard = 0; $connectionGuard < 32 && $currentInstanceID > 0; $connectionGuard++) {
+                    if (isset($connectionVisited[$currentInstanceID]) || !IPS_InstanceExists($currentInstanceID)) {
+                        break;
+                    }
+                    $connectionVisited[$currentInstanceID] = true;
+
+                    if ($this->isUsableLcnModule($currentInstanceID)) {
+                        return $currentInstanceID;
+                    }
+
+                    $instance = IPS_GetInstance($currentInstanceID);
+                    $currentInstanceID = (int) ($instance['ConnectionID'] ?? 0);
+                }
+            }
+
+            $currentObjectID = IPS_GetParent($currentObjectID);
+        }
+
+        return 0;
+    }
+
     private function validateTS(string $value): bool
     {
         if (!preg_match('/^[K-]{4}[01]{8}$/', $value)) {
@@ -1002,11 +1066,12 @@ class LCNJalousie extends IPSModuleStrict
 
     private function invalidateReferenceAfterModelUpdate(int $stateCategoryID, string $previousVersion): void
     {
-        // Nur Updates von einem Stand vor dem gemessenen Bewegungsmodell
-        // (0.1.7) machen eine vorhandene Positionsreferenz unbrauchbar.
-        // Reine Visualisierungsupdates wie 0.1.8 -> 0.1.9 dürfen eine bereits
-        // gültige Referenz nicht ohne technischen Grund verwerfen.
-        if ($previousVersion === '' || version_compare($previousVersion, '0.1.7', '>=')) {
+        // Version 0.1.14 führt getrennte Richtungs-Gesamtzeiten ein. Ein zuvor
+        // in einer Zwischenposition berechneter Wert kann noch auf dem alten,
+        // symmetrischen Zeitmodell beruhen. Deshalb ist nach dem Update einmal
+        // eine neue Endlagenreferenz erforderlich. Frische Instanzen und
+        // spätere reine Updates ab 0.1.14 behalten ihre Referenz.
+        if ($previousVersion === '' || version_compare($previousVersion, '0.1.14', '>=')) {
             return;
         }
 
@@ -1135,15 +1200,15 @@ class LCNJalousie extends IPSModuleStrict
             ['TS_KURZ_AUF', 'TS KURZ AUF', 3, '', 80, '', true],
             ['TS_KURZ_AB', 'TS KURZ AB', 3, '', 90, '', true],
             ['TS_Belegung_bestaetigt', 'TS-Belegung bestätigt', 0, '~Switch', 100, false, true],
-            ['Gesamtlaufzeit_ms', 'Gesamtlaufzeit [ms]', 1, '', 110, 0, true],
+            ['Gesamtlaufzeit_ms', 'Gesamtlaufzeit 100→0 AUF inkl. Wendezeit [ms]', 1, '', 110, 0, true],
             ['Wendezeit_ms', 'Volle Wendezeit [ms]', 1, '', 120, 0, true],
             ['Sanftanlauf_ms', 'Sanftanlauf Zwischenposition [ms]', 1, '', 125, 0, true],
-            ['Behanglaufzeit_ms', 'Reine Behanglaufzeit [ms]', 1, '', 130, 0, true],
+            ['Behanglaufzeit_ms', 'Gesamtlaufzeit 0→100 ZU [ms]', 1, '', 130, 0, true],
             ['Referenzreserve_ms', 'Referenzreserve [ms]', 1, '', 140, 0, true],
             ['MaxFahrt_ms', 'Maximale Fahrt [ms]', 1, '', 150, 0, true],
-            ['ShakeFree_ms', 'ShakeFree Gegenfahrt [ms]', 1, '', 160, 0, true],
-            ['ShakeFree_Pause_ms', 'ShakeFree Umschaltpause [ms]', 1, '', 165, 0, true],
-            ['Kalibrierfenster_ms', 'Kalibrierfenster vor ShakeFree [ms]', 1, '', 167, 30000, true],
+            ['ShakeFree_ms', 'ShakeFree nach Endlage ZU – Gegenfahrt [ms]', 1, '', 160, 0, true],
+            ['ShakeFree_Pause_ms', 'ShakeFree nach Endlage ZU – Umschaltpause [ms]', 1, '', 165, 0, true],
+            ['Kalibrierfenster_ms', 'Zeitverzögerung / Kalibrierfenster nach 100 % ZU [ms]', 1, '', 167, 30000, true],
             ['Relaisbestaetigung_ms', 'Startbestätigung [ms]', 1, '', 170, 0, true],
             ['Stoppbestaetigung_ms', 'Stoppbestätigung [ms]', 1, '', 180, 0, true],
             ['Spaetstart_Schutz_ms', 'Spätstart-Schutz [ms]', 1, '', 190, 0, true],
@@ -1166,7 +1231,7 @@ class LCNJalousie extends IPSModuleStrict
     {
         $this->variable($parentID, 'Soll_Behang', 'Soll Behang', 1, 'LCNJAL.Position.Int', 10, 0, false);
         $this->variable($parentID, 'Soll_Lamelle', 'Soll Lamelle', 1, 'LCNJAL.Slat', 20, 0, false);
-        $this->variable($parentID, 'ShakeFree_Aktiv', 'ShakeFree aktiv', 0, '~Switch', 30, false, false);
+        $this->variable($parentID, 'ShakeFree_Aktiv', 'ShakeFree nach Endlage ZU', 0, '~Switch', 30, false, false);
         $this->variable($parentID, 'Stopp', 'STOP', 0, 'LCNJAL.Stop', 40, false, false);
         $this->variable($parentID, 'Referenzfahrt', 'Referenzfahrt', 1, 'LCNJAL.Reference', 50, 0, false);
     }
@@ -1301,8 +1366,8 @@ class LCNJalousie extends IPSModuleStrict
         $links = [
             ['Relais_AUF', 'Relais AUF', $this->ReadPropertyInteger('RelayUpVariableID'), 10],
             ['Relais_AB', 'Relais AB', $this->ReadPropertyInteger('RelayDownVariableID'), 20],
-            ['GT8_LANG_AUF', 'GT8 LANG AUF Toggle / Ausgang 3', $this->ReadPropertyInteger('GT8LongUpVariableID'), 30],
-            ['GT8_LANG_AB', 'GT8 LANG AB Toggle / Ausgang 4', $this->ReadPropertyInteger('GT8LongDownVariableID'), 40],
+            ['GT8_LANG_AUF', 'GT8 LANG AUF / frei wählbarer simulierter Ausgang 3', $this->ReadPropertyInteger('GT8LongUpVariableID'), 30],
+            ['GT8_LANG_AB', 'GT8 LANG ZU / frei wählbarer simulierter Ausgang 4', $this->ReadPropertyInteger('GT8LongDownVariableID'), 40],
         ];
         foreach ($links as [$ident, $name, $target, $position]) {
             if ($target > 0 && IPS_VariableExists($target)) {
@@ -1330,7 +1395,7 @@ class LCNJalousie extends IPSModuleStrict
         $links = [
             ['V_Soll_Behang', 'Behang', $this->find($controlID, 'Soll_Behang'), 10],
             ['V_Soll_Lamelle', 'Lamelle', $this->find($controlID, 'Soll_Lamelle'), 20],
-            ['V_ShakeFree', 'ShakeFree', $this->find($controlID, 'ShakeFree_Aktiv'), 30],
+            ['V_ShakeFree', 'ShakeFree nach Endlage ZU', $this->find($controlID, 'ShakeFree_Aktiv'), 30],
             ['V_Stop', 'STOP', $this->find($controlID, 'Stopp'), 40],
             ['V_Referenz', 'Referenzfahrt', $this->find($controlID, 'Referenzfahrt'), 50],
             ['V_Ist_Behang', 'Ist Behang', $this->find($stateID, 'Ist_Behang'), 60],
