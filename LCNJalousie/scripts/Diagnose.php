@@ -297,6 +297,7 @@ if ($errors === []) {
     $reserve = GetValueInteger((int) JD_ID($rootID, '01_Konfiguration', 'Referenzreserve_ms'));
     $max = GetValueInteger((int) JD_ID($rootID, '01_Konfiguration', 'MaxFahrt_ms'));
     $shake = GetValueInteger((int) JD_ID($rootID, '01_Konfiguration', 'ShakeFree_ms'));
+    $shakePause = GetValueInteger((int) JD_ID($rootID, '01_Konfiguration', 'ShakeFree_Pause_ms'));
     $startConfirm = GetValueInteger((int) JD_ID($rootID, '01_Konfiguration', 'Relaisbestaetigung_ms'));
     $stopConfirm = GetValueInteger((int) JD_ID($rootID, '01_Konfiguration', 'Stoppbestaetigung_ms'));
     $guard = GetValueInteger((int) JD_ID($rootID, '01_Konfiguration', 'Spaetstart_Schutz_ms'));
@@ -316,6 +317,9 @@ if ($errors === []) {
     }
     if ($total + $reserve !== $max) {
         JD_Add($warnings, 'MaxFahrt entspricht nicht Gesamtlaufzeit + Referenzreserve.');
+    }
+    if ($shakePause < 0 || $shakePause > 3000) {
+        JD_Add($errors, 'ShakeFree_Pause_ms muss zwischen 0 und 3000 ms liegen.');
     }
     if ($shake !== $turn) {
         JD_Add($warnings, 'ShakeFree_ms weicht von Wendezeit_ms ab. Laut Funktionsvorgabe ist die Gegenfahrt exakt eine Wendezeit.');

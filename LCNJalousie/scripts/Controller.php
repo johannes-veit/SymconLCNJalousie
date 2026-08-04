@@ -91,6 +91,10 @@ try {
             SetValueBoolean(J_ID($rootID, '03_Bedienung', 'Stopp'), false);
             break;
 
+        case 'RESET_ERROR':
+            J_ResetError($rootID);
+            break;
+
         case 'REFERENCE_UP':
             SetValueInteger(J_ID($rootID, '03_Bedienung', 'Referenzfahrt'), 0);
             J_RequestReference($rootID, J_DIR_UP);
@@ -1021,8 +1025,21 @@ function J_HandleRealStart(int $rootID, int $direction, float $now): void
     }
 
     if ($phase === J_PHASE_ERROR) {
-        SetValueBoolean(J_ID($rootID, '05_Intern', 'Abbruch_Fehlerphase'), true);
-        J_BeginStopWatch($rootID, 'Relaisstart im Fehlerzustand', true);
+        // Fehlerzustände dürfen die lokale LCN-Bedienung niemals blockieren.
+        // Ein realer Start wird deshalb nur noch als externe Fahrt verfolgt;
+        // es wird ausdrücklich KEIN weiterer TS-/STOP-Befehl gesendet.
+        J_NextOrder($rootID);
+        J_ClearPending($rootID);
+        SetValueInteger(J_ID($rootID, '05_Intern', 'Folge_Lamelle'), -1);
+        SetValueInteger(J_ID($rootID, '05_Intern', 'Folge_Richtung'), J_DIR_NONE);
+        SetValueBoolean(J_ID($rootID, '05_Intern', 'Stop_Angefordert'), false);
+        SetValueBoolean(J_ID($rootID, '05_Intern', 'Abbruch_Wartet_Auf_Start'), false);
+        SetValueBoolean(J_ID($rootID, '05_Intern', 'Abbruch_Fehlerphase'), false);
+        SetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase'), J_PHASE_EXTERNAL);
+        SetValueBoolean(J_ID($rootID, '04_Istwerte', 'Automatik_Aktiv'), false);
+        SetValueInteger(J_ID($rootID, '04_Istwerte', 'Fahrstatus'), $direction);
+        J_SetWorker($rootID, true);
+        J_SetLastAction($rootID, 'Externe Fahrt im Fehlerzustand erkannt; keine Automatikintervention');
         return;
     }
 
@@ -1156,6 +1173,18 @@ function J_StartShakeNow(int $rootID): void
         J_SetError($rootID, 'ShakeFree kann nur im Stillstand starten.', false);
         return;
     }
+
+    // Nach dem bestätigten AB-STOP erhält LCN eine kurze Umschaltpause.
+    // Die eigentliche Gegenfahrt bleibt exakt ShakeFree_ms lang.
+    $pauseMs = J_ConfigInt($rootID, 'ShakeFree_Pause_ms');
+    if ($pauseMs > 0) {
+        IPS_Sleep($pauseMs);
+    }
+    if (J_RelayState($rootID) !== J_DIR_NONE) {
+        J_SetError($rootID, 'ShakeFree-Umschaltpause: Relais sind nicht sicher AUS.', false);
+        return;
+    }
+
     $duration = J_ConfigInt($rootID, 'ShakeFree_ms');
     $order = J_NextOrder($rootID);
     J_ClearError($rootID);
@@ -1227,7 +1256,7 @@ function J_HandleStartTimeout(int $rootID, int $order): void
     J_ClearPending($rootID);
     SetValueInteger(J_ID($rootID, '05_Intern', 'Folge_Lamelle'), -1);
     SetValueInteger(J_ID($rootID, '05_Intern', 'Folge_Richtung'), J_DIR_NONE);
-    J_BeginCancelGuard($rootID, 'Starttimeout; verspaeteten Relaisstart abfangen', true);
+    J_BeginCancelGuard($rootID, 'Starttimeout; verspaeteten Relaisstart abfangen', false);
 }
 
 function J_HandleStopTimeout(int $rootID, int $order): void
@@ -1288,6 +1317,37 @@ function J_HandleCancelGuard(int $rootID, int $order): void
     } else {
         J_FinishIdle($rootID, 'Abbruch-Schutzfenster beendet');
     }
+}
+
+function J_ResetError(int $rootID): void
+{
+    $state = J_RelayState($rootID);
+    if ($state !== J_DIR_NONE) {
+        J_SetLastAction($rootID, 'Fehlerquittierung abgelehnt: zuerst beide Relais lokal ausschalten');
+        return;
+    }
+
+    J_NextOrder($rootID);
+    J_SetWorker($rootID, false);
+    J_ClearPending($rootID);
+    SetValueInteger(J_ID($rootID, '05_Intern', 'Folge_Lamelle'), -1);
+    SetValueInteger(J_ID($rootID, '05_Intern', 'Folge_Richtung'), J_DIR_NONE);
+    SetValueInteger(J_ID($rootID, '05_Intern', 'Auftragstyp'), J_ORDER_NONE);
+    SetValueInteger(J_ID($rootID, '05_Intern', 'Erwartete_Richtung'), J_DIR_NONE);
+    SetValueInteger(J_ID($rootID, '05_Intern', 'Geplante_Dauer_ms'), 0);
+    SetValueFloat(J_ID($rootID, '05_Intern', 'Zielzeit_ms'), 0.0);
+    SetValueFloat(J_ID($rootID, '05_Intern', 'Bestaetigung_bis_ms'), 0.0);
+    SetValueFloat(J_ID($rootID, '05_Intern', 'Stop_bis_ms'), 0.0);
+    SetValueFloat(J_ID($rootID, '05_Intern', 'Abbruch_bis_ms'), 0.0);
+    SetValueBoolean(J_ID($rootID, '05_Intern', 'Stop_Angefordert'), false);
+    SetValueBoolean(J_ID($rootID, '05_Intern', 'Abbruch_Wartet_Auf_Start'), false);
+    SetValueBoolean(J_ID($rootID, '05_Intern', 'Abbruch_Fehlerphase'), false);
+    SetValueBoolean(J_ID($rootID, '05_Intern', 'Endlage_Hart'), false);
+    SetValueString(J_ID($rootID, '04_Istwerte', 'Fehlertext'), '');
+    SetValueInteger(J_ID($rootID, '04_Istwerte', 'Fahrstatus'), J_DIR_NONE);
+    SetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase'), J_PHASE_IDLE);
+    SetValueBoolean(J_ID($rootID, '04_Istwerte', 'Automatik_Aktiv'), false);
+    J_SetLastAction($rootID, 'Fehler quittiert; keine LCN-Taste gesendet');
 }
 
 function J_FinishIdle(int $rootID, string $reason): void

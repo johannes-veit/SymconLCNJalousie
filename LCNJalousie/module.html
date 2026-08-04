@@ -457,8 +457,24 @@
     }
 
     .jal-tile.has-warning .jal-warning {
-        display: block;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
     }
+
+    .jal-warning-reset {
+        flex: 0 0 auto;
+        border: 1px solid rgba(255,255,255,0.8);
+        border-radius: 999px;
+        padding: 4px 10px;
+        color: #ffffff;
+        background: transparent;
+        font-weight: 700;
+        cursor: pointer;
+    }
+
+    .jal-warning-reset[hidden] { display: none !important; }
 
     @media (max-width: 760px), (max-height: 430px) {
         html,
@@ -662,7 +678,7 @@
         </div>
     </footer>
 
-    <div id="jal-warning" class="jal-warning"></div>
+    <div id="jal-warning" class="jal-warning"><span id="jal-warning-text"></span><button id="jal-reset-error" class="jal-warning-reset" type="button" hidden>Fehler quittieren</button></div>
 </div>
 
 <script>
@@ -683,6 +699,7 @@
         controlsEnabled: false,
         intermediateAllowed: false,
         stopEnabled: false,
+        faultResetAllowed: false,
         statusText: 'GESTOPPT',
         statusKey: 'stopped',
         errorText: ''
@@ -741,7 +758,7 @@
 
     function showLocalWarning(message) {
         const tile = byId('jal-tile');
-        const warning = byId('jal-warning');
+        const warning = byId('jal-warning-text');
         warning.textContent = message;
         tile.classList.add('has-warning');
         window.setTimeout(() => tile.classList.remove('has-warning'), 5000);
@@ -853,8 +870,9 @@
             : (Number(jalState.phase) === 9
                 ? 'LCN-Statusabgleich läuft – Bedienung kurz gesperrt.'
                 : (jalState.errorText || ''));
-        const warning = byId('jal-warning');
+        const warning = byId('jal-warning-text');
         warning.textContent = warningText;
+        byId('jal-reset-error').hidden = !Boolean(jalState.faultResetAllowed);
         byId('jal-tile').classList.toggle('has-warning', warningText !== '');
     }
 
@@ -897,6 +915,10 @@
 
     byId('jal-shakefree').addEventListener('change', (event) => {
         sendJalousieAction('ShakeFree', Boolean(event.target.checked));
+    });
+
+    byId('jal-reset-error').addEventListener('click', () => {
+        sendJalousieAction('ResetError', true);
     });
 
     renderJalousie();

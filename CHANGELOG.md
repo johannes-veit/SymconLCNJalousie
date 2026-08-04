@@ -1,3 +1,10 @@
+## 0.1.12
+
+- Notfall-Hotfix: Fehlerphase blockiert lokale LCN-Bedienung nicht mehr.
+- ShakeFree-Umschaltpause (Standard 500 ms).
+- Fehlerquittierung ohne LCN-Befehl.
+- Starttimeout kehrt nach Spätstart-Schutz in den Stillstand zurück.
+
 # Changelog
 
 ## 0.1.11 – 2026-08-04
