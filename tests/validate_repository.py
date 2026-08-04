@@ -139,6 +139,45 @@ def check_lcn_connection_chain_validation() -> None:
                 f'{path.relative_to(ROOT)}: physical LCN assignment validation must follow instance ConnectionID ({pattern} missing)'
             )
 
+
+def check_native_shutter_visualization() -> None:
+    module_path = ROOT / 'LCNJalousie' / 'module.php'
+    controller_path = ROOT / 'LCNJalousie' / 'scripts' / 'Controller.php'
+    worker_path = ROOT / 'LCNJalousie' / 'scripts' / 'Worker.php'
+    if not module_path.is_file() or not controller_path.is_file() or not worker_path.is_file():
+        return
+    module = module_path.read_text(encoding='utf-8')
+    controller = controller_path.read_text(encoding='utf-8')
+    worker = worker_path.read_text(encoding='utf-8')
+    required_module = [
+        "RegisterVariableInteger(\n            'Position'",
+        "RegisterVariableInteger(\n            'Drehgrad'",
+        'VARIABLE_PRESENTATION_SHUTTER',
+        "public function RequestAction(string $Ident, mixed $Value): void",
+        "public function SyncVisualization(): void",
+        "$this->EnableAction('Position')",
+        "$this->EnableAction('Drehgrad')",
+    ]
+    for pattern in required_module:
+        if pattern not in module:
+            ERRORS.append(f'{module_path.relative_to(ROOT)}: native shutter visualization missing ({pattern})')
+    if "LCNJAL_SyncVisualization($rootID)" not in controller:
+        ERRORS.append(f'{controller_path.relative_to(ROOT)}: controller must synchronize native tile values')
+    if "LCNJAL_SyncVisualization($rootID)" not in worker:
+        ERRORS.append(f'{worker_path.relative_to(ROOT)}: worker must synchronize native tile values while moving')
+    if "in_array($target, [0, 50, 100], true)" in controller:
+        ERRORS.append(f'{controller_path.relative_to(ROOT)}: tile lamella target must not be limited to 0/50/100')
+    if "Lamellenposition ist nicht referenziert. Zuerst Referenzfahrt AUF oder AB ausfuehren." not in controller:
+        ERRORS.append(f'{controller_path.relative_to(ROOT)}: unreferenced lamella commands must be rejected')
+    for pattern in [
+        "$referenceRun = $explicitReference || (!$positionReferenced && $hardEnd);",
+        "$duration = $referenceRun",
+        "$referenceRun ? J_ORDER_REFERENCE : J_ORDER_BLIND",
+    ]:
+        if pattern not in controller:
+            ERRORS.append(f'{controller_path.relative_to(ROOT)}: unknown end-position commands must perform a full reference run ({pattern})')
+
+
 def main() -> int:
     check_required()
     check_root_structure()
@@ -147,6 +186,7 @@ def main() -> int:
     check_metadata()
     check_configurator_configuration_object()
     check_lcn_connection_chain_validation()
+    check_native_shutter_visualization()
     check_php()
     if ERRORS:
         print('VALIDATION FAILED')

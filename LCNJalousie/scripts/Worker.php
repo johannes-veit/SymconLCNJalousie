@@ -94,6 +94,10 @@ try {
         IPS_SetScriptTimer((int) $_IPS['SELF'], 0);
         SetValueBoolean(JW_ID($rootID, '05_Intern', 'Worker_Aktiv'), false);
     }
+
+    if (IPS_FunctionExists('LCNJAL_SyncVisualization')) {
+        LCNJAL_SyncVisualization($rootID);
+    }
 } finally {
     IPS_SemaphoreLeave($lockName);
 }

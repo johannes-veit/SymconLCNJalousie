@@ -156,6 +156,13 @@ try {
     }
     IPS_LogMessage('Jalousie', $e->getMessage());
 } finally {
+    try {
+        if (IPS_FunctionExists('LCNJAL_SyncVisualization')) {
+            LCNJAL_SyncVisualization($rootID);
+        }
+    } catch (Throwable $visualizationError) {
+        IPS_LogMessage('Jalousie', 'Visualisierung konnte nicht synchronisiert werden: ' . $visualizationError->getMessage());
+    }
     IPS_SemaphoreLeave($lockName);
 }
 
@@ -583,30 +590,38 @@ function J_StartBlindNow(int $rootID, float $target, bool $explicitReference): v
     SetValueInteger(J_ID($rootID, '05_Intern', 'Folge_Richtung'), J_DIR_NONE);
 
     $hardEnd = $target <= 0.0 || $target >= 100.0;
-    $duration = $explicitReference
+    $positionReferenced = GetValueBoolean(J_ID($rootID, '04_Istwerte', 'Position_Referenziert'));
+    // Ist die Position noch unbekannt, muss ein Endlagenauftrag unabhaengig vom
+    // gespeicherten Rechenwert als volle Referenzfahrt laufen. Andernfalls koennte
+    // der Initialwert 0 % bei einem AUF-Auftrag zu einer zu kurzen Fahrt fuehren.
+    $referenceRun = $explicitReference || (!$positionReferenced && $hardEnd);
+    $duration = $referenceRun
         ? J_ConfigInt($rootID, 'MaxFahrt_ms')
         : J_BlindDurationMs($rootID, $actualBlind, $target, $actualSlat, $direction, $hardEnd);
 
     $order = J_NextOrder($rootID);
     J_ClearError($rootID);
-    SetValueInteger(J_ID($rootID, '05_Intern', 'Auftragstyp'), $explicitReference ? J_ORDER_REFERENCE : J_ORDER_BLIND);
+    SetValueInteger(J_ID($rootID, '05_Intern', 'Auftragstyp'), $referenceRun ? J_ORDER_REFERENCE : J_ORDER_BLIND);
     SetValueInteger(J_ID($rootID, '05_Intern', 'Erwartete_Richtung'), $direction);
     SetValueInteger(J_ID($rootID, '05_Intern', 'Geplante_Dauer_ms'), $duration);
     SetValueFloat(J_ID($rootID, '05_Intern', 'Ziel_Behang'), $target);
     SetValueFloat(J_ID($rootID, '05_Intern', 'Ziel_Lamelle'), (float) $targetSlat);
     SetValueBoolean(J_ID($rootID, '05_Intern', 'Stop_Angefordert'), false);
-    SetValueBoolean(J_ID($rootID, '05_Intern', 'Endlage_Hart'), $hardEnd || $explicitReference);
+    SetValueBoolean(J_ID($rootID, '05_Intern', 'Endlage_Hart'), $hardEnd || $referenceRun);
     SetValueFloat(J_ID($rootID, '05_Intern', 'Bestaetigung_bis_ms'), J_NowMs() + J_ConfigInt($rootID, 'Relaisbestaetigung_ms'));
     SetValueFloat(J_ID($rootID, '05_Intern', 'Stop_bis_ms'), 0.0);
     SetValueFloat(J_ID($rootID, '05_Intern', 'Zielzeit_ms'), 0.0);
     SetValueBoolean(J_ID($rootID, '05_Intern', 'Abbruch_Wartet_Auf_Start'), false);
     SetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase'), J_PHASE_WAIT_START);
     SetValueBoolean(J_ID($rootID, '04_Istwerte', 'Automatik_Aktiv'), true);
-    if ($hardEnd || $explicitReference) {
+    if ($hardEnd || $referenceRun) {
         SetValueBoolean(J_ID($rootID, '04_Istwerte', 'Position_Referenziert'), false);
     }
 
-    J_SetLastAction($rootID, ($explicitReference ? 'Referenzfahrt ' : 'Behangfahrt ') . ($direction === J_DIR_UP ? 'AUF' : 'AB') . ', Auftrag ' . $order);
+    $actionName = $explicitReference
+        ? 'Referenzfahrt '
+        : ($referenceRun ? 'Automatische Referenzfahrt ' : 'Behangfahrt ');
+    J_SetLastAction($rootID, $actionName . ($direction === J_DIR_UP ? 'AUF' : 'AB') . ', Auftrag ' . $order);
     J_SetWorker($rootID, true);
     if (!J_SendDirection($rootID, $direction)) {
         J_SetWorker($rootID, false);
@@ -615,10 +630,14 @@ function J_StartBlindNow(int $rootID, float $target, bool $explicitReference): v
 
 function J_RequestSlat(int $rootID, int $target, int $forcedDirection): void
 {
-    if (!in_array($target, [0, 50, 100], true)) {
-        $target = 50;
-    }
+    $target = (int) round(J_Clamp((float) $target));
     SetValueInteger(J_ID($rootID, '03_Bedienung', 'Soll_Lamelle'), $target);
+
+    if (!GetValueBoolean(J_ID($rootID, '04_Istwerte', 'Position_Referenziert'))
+        && !J_ConfigBool($rootID, 'Unreferenziert_erlauben')) {
+        J_Reject($rootID, 'Lamellenposition ist nicht referenziert. Zuerst Referenzfahrt AUF oder AB ausfuehren.');
+        return;
+    }
     J_ReconcileRelayState($rootID);
     J_UpdatePositionToNow($rootID);
 

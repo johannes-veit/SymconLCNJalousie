@@ -1,3 +1,14 @@
+# Changelog
+
+## 0.1.6
+
+- Native Symcon-Rollladenkachel: direkte Statusvariablen `Position` und `Drehgrad` unter der Modulinstanz.
+- `RequestAction()` leitet Bedienungen der Kachel sicher an den vorhandenen Controller weiter.
+- Position und Lamellenwinkel werden während der Fahrt laufend mit der Kachel synchronisiert.
+- Direkte Statusvariable `Position gültig` und Instanzzusammenfassung zeigen an, ob eine Referenz vorliegt.
+- Lamellenziele aus der Kachel können nun stufenlos von 0 bis 100 % gewählt werden; GT8-LANG bleibt bei 50 %. Ohne gültige Referenz werden Lamellenfahrten standardmäßig abgewiesen.
+- Ist die Position noch unbekannt, wird der erste Endlagenauftrag auf 0 % oder 100 % automatisch als volle Referenzfahrt mit `MaxFahrt_ms` ausgeführt. Erst nach bestätigtem STOP wird die Position gültig. Eine explizite Referenzfahrt bleibt ebenfalls verfügbar.
+
 # Änderungsprotokoll
 
 ## 0.1.5 – 2026-08-04

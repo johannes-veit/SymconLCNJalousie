@@ -11,7 +11,7 @@ declare(strict_types=1);
  */
 class LCNJalousie extends IPSModuleStrict
 {
-    private const VERSION = '0.1.5';
+    private const VERSION = '0.1.6';
     private const EXECUTE_PARENT_ACTION = '{7938A5A2-0981-5FE0-BE6C-8AA610D654EB}';
 
     private const STATUS_ACTIVE = 102;
@@ -73,6 +73,7 @@ class LCNJalousie extends IPSModuleStrict
 
         try {
             $this->ensureProfiles();
+            $this->ensureInstanceVisualizationVariables();
             $ids = $this->ensureObjectTree();
             $this->ensureRuntimeScripts($ids['scripts']);
             $this->synchronizeConfiguration($ids['configuration']);
@@ -87,6 +88,7 @@ class LCNJalousie extends IPSModuleStrict
             $this->SetSummary($validation['status'] === self::STATUS_ACTIVE ? 'bereit' : 'Konfiguration unvollständig');
 
             $this->setRuntimeEnabled($validation['status'] === self::STATUS_ACTIVE, $ids['scripts']);
+            $this->SyncVisualization();
             $this->WriteAttributeString('GeneratedVersion', self::VERSION);
         } catch (Throwable $e) {
             $this->SetStatus(self::STATUS_STRUCTURE_ERROR);
@@ -196,6 +198,70 @@ class LCNJalousie extends IPSModuleStrict
         ];
 
         return json_encode($form, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    }
+
+    public function RequestAction(string $Ident, mixed $Value): void
+    {
+        $validation = $this->validateConfiguration();
+        if ($validation['status'] !== self::STATUS_ACTIVE) {
+            throw new RuntimeException('Jalousiesteuerung ist nicht freigegeben: ' . implode(' | ', $validation['messages']));
+        }
+
+        $scriptsCategoryID = @IPS_GetObjectIDByIdent('06_Skripte', $this->InstanceID);
+        if ($scriptsCategoryID === false) {
+            throw new RuntimeException('Skriptkategorie fehlt. Objektbaum neu aufbauen.');
+        }
+        $controllerID = @IPS_GetObjectIDByIdent('Controller', (int) $scriptsCategoryID);
+        if ($controllerID === false || !IPS_ScriptExists((int) $controllerID)) {
+            throw new RuntimeException('Controller-Skript fehlt. Objektbaum neu aufbauen.');
+        }
+
+        $parameters = match ($Ident) {
+            'Position' => [
+                'ACTION' => 'SET_BLIND',
+                'VALUE'  => max(0, min(100, (int) round((float) $Value))),
+            ],
+            'Drehgrad' => [
+                'ACTION' => 'SET_SLAT',
+                'VALUE'  => max(0, min(100, (int) round((float) $Value))),
+            ],
+            default => throw new InvalidArgumentException('Unbekannte Visualisierungsaktion: ' . $Ident),
+        };
+
+        IPS_RunScriptWaitEx((int) $controllerID, $parameters);
+        $this->SyncVisualization();
+    }
+
+    public function SyncVisualization(): void
+    {
+        $stateCategoryID = @IPS_GetObjectIDByIdent('04_Istwerte', $this->InstanceID);
+        if ($stateCategoryID === false) {
+            return;
+        }
+
+        $blindID = @IPS_GetObjectIDByIdent('Ist_Behang', (int) $stateCategoryID);
+        $slatID = @IPS_GetObjectIDByIdent('Ist_Lamelle', (int) $stateCategoryID);
+        $referencedID = @IPS_GetObjectIDByIdent('Position_Referenziert', (int) $stateCategoryID);
+        if ($blindID === false || $slatID === false || $referencedID === false) {
+            return;
+        }
+        if (!IPS_VariableExists((int) $blindID)
+            || !IPS_VariableExists((int) $slatID)
+            || !IPS_VariableExists((int) $referencedID)) {
+            return;
+        }
+
+        $position = max(0, min(100, (int) round(GetValueFloat((int) $blindID))));
+        $rotation = max(0, min(100, (int) round(GetValueFloat((int) $slatID))));
+        $referenced = GetValueBoolean((int) $referencedID);
+
+        $this->SetValue('Position', $position);
+        $this->SetValue('Drehgrad', $rotation);
+        $this->SetValue('Referenziert', $referenced);
+
+        if ($this->GetStatus() === self::STATUS_ACTIVE) {
+            $this->SetSummary($referenced ? 'bereit · Position gültig' : 'bereit · Referenz erforderlich');
+        }
     }
 
     public function CheckConfiguration(): string
@@ -459,6 +525,57 @@ class LCNJalousie extends IPSModuleStrict
             return false;
         }
         return substr_count(substr($value, 4), '1') === 1;
+    }
+
+    private function ensureInstanceVisualizationVariables(): void
+    {
+        $positionCreated = $this->RegisterVariableInteger(
+            'Position',
+            'Position',
+            [
+                'PRESENTATION'       => VARIABLE_PRESENTATION_SHUTTER,
+                'USAGE_TYPE'         => 0,
+                'OPEN_OUTSIDE_VALUE' => 0,
+                'CLOSE_INSIDE_VALUE' => 100,
+                'SUN_POSITION'       => 1,
+            ],
+            1
+        );
+        if ($positionCreated) {
+            $this->SetValue('Position', 0);
+        }
+        $this->EnableAction('Position');
+
+        $rotationCreated = $this->RegisterVariableInteger(
+            'Drehgrad',
+            'Drehgrad',
+            [
+                'PRESENTATION'         => VARIABLE_PRESENTATION_SHUTTER,
+                'USAGE_TYPE'           => 1,
+                'OPEN_OUTSIDE_VALUE'   => 100,
+                'CLOSE_INSIDE_VALUE'   => 0,
+                'MAX_ROTATION_INSIDE'  => -55,
+                'MAX_ROTATION_OUTSIDE' => 55,
+                'SUN_POSITION'         => 1,
+            ],
+            2
+        );
+        if ($rotationCreated) {
+            $this->SetValue('Drehgrad', 0);
+        }
+        $this->EnableAction('Drehgrad');
+
+        $referencedCreated = $this->RegisterVariableBoolean(
+            'Referenziert',
+            'Position gültig',
+            [
+                'PRESENTATION' => VARIABLE_PRESENTATION_SWITCH,
+            ],
+            3
+        );
+        if ($referencedCreated) {
+            $this->SetValue('Referenziert', false);
+        }
     }
 
     private function ensureProfiles(): void
