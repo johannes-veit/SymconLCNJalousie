@@ -1,5 +1,11 @@
 # Änderungsprotokoll
 
+## 0.1.3 – 2026-08-04
+
+- Kritischen Konfiguratorfehler behoben: `create.configuration` wird nun als JSON-Objekt `{}` statt als Array `[]` ausgegeben.
+- Vorhandene Instanzkonfigurationen werden ohne assoziative Decodierung übernommen, damit auch leere Konfigurationen Objekte bleiben.
+- Repository-Prüfung um eine Kontrolle des Konfigurator-Konfigurationstyps erweitert.
+
 ## 0.1.2 – 2026-08-04
 
 - Kritischer Instanzerstellungsfehler behoben: Der Klassenname des Konfigurators stimmt jetzt exakt mit dem `name`-Feld aus `module.json` überein (`LCNJalousieKonfigurator`).

@@ -20,7 +20,7 @@ Diese Anleitung führt Sie ohne Git-Vorkenntnisse vom vorbereiteten Ordner bis z
 
 ## B. Ersten Stand speichern und öffentlich veröffentlichen
 
-1. Unten links bei **Summary** tragen Sie ein: `Fix configurator class name 0.1.2`.
+1. Unten links bei **Summary** tragen Sie ein: `Fix configurator class name 0.1.3`.
 2. Klicken Sie auf **Commit to main**.
 3. Klicken Sie oben auf **Publish repository**.
 4. Kontrollieren Sie den Namen `SymconLCNJalousie`.
@@ -96,3 +96,8 @@ Arbeiten Sie die Bereiche von oben nach unten ab:
 4. Klicken Sie auf **Commit to main**.
 5. Klicken Sie auf **Push origin**.
 6. In Symcon öffnen Sie Module Control und wählen **Auf Aktualisierung prüfen**.
+
+
+## Fehler „Konfiguration ist nicht vom Typ Objekt“
+
+Dieser Fehler betraf Version 0.1.2. In Version 0.1.3 wird die Initialkonfiguration des Konfigurators korrekt als JSON-Objekt `{}` ausgegeben. Nach dem Update in der Symcon-Modulverwaltung kann die Zeile „Neue LCN-Jalousie“ über „Alle erstellen“ angelegt werden.

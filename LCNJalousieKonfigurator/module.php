@@ -21,9 +21,11 @@ class LCNJalousieKonfigurator extends IPSModuleStrict
     {
         $values = [];
         foreach (IPS_GetInstanceListByModuleID(self::DEVICE_MODULE_ID) as $instanceID) {
-            $configuration = json_decode(IPS_GetConfiguration($instanceID), true);
-            if (!is_array($configuration)) {
-                $configuration = [];
+            // Symcon requires create.configuration to be a JSON object, never a JSON array.
+            // Decode without associative=true so even an empty configuration remains {}.
+            $configuration = json_decode(IPS_GetConfiguration($instanceID));
+            if (!is_object($configuration)) {
+                $configuration = new stdClass();
             }
             $values[] = [
                 'name' => IPS_GetName($instanceID),
@@ -44,7 +46,7 @@ class LCNJalousieKonfigurator extends IPSModuleStrict
                 'moduleID' => self::DEVICE_MODULE_ID,
                 'name' => 'LCN Jalousie',
                 'location' => ['Jalousiesteuerung'],
-                'configuration' => [],
+                'configuration' => new stdClass(),
             ],
         ];
 

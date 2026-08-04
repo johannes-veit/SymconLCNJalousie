@@ -101,12 +101,34 @@ def check_metadata() -> None:
         check_module_identity(path.parent)
 
 
+
+def check_configurator_configuration_object() -> None:
+    path = ROOT / 'LCNJalousieKonfigurator' / 'module.php'
+    if not path.is_file():
+        return
+    php = path.read_text(encoding='utf-8')
+    forbidden = [
+        "'configuration' => []",
+        '"configuration" => []',
+        'json_decode(IPS_GetConfiguration($instanceID), true)',
+    ]
+    for pattern in forbidden:
+        if pattern in php:
+            ERRORS.append(
+                f'{path.relative_to(ROOT)}: create.configuration must be encoded as a JSON object, not an array ({pattern})'
+            )
+    if "'configuration' => new stdClass()" not in php:
+        ERRORS.append(
+            f'{path.relative_to(ROOT)}: empty create.configuration should use new stdClass() so json_encode emits {{}}'
+        )
+
 def main() -> int:
     check_required()
     check_root_structure()
     for path in ROOT.rglob('*.json'):
         check_json(path)
     check_metadata()
+    check_configurator_configuration_object()
     check_php()
     if ERRORS:
         print('VALIDATION FAILED')
