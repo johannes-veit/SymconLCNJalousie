@@ -27,5 +27,18 @@ if ($self <= 0 || !IPS_ScriptExists($self)) {
     throw new RuntimeException('SELF ist keine gueltige Skript-ID.');
 }
 $rootID = IPS_GetParent(IPS_GetParent($self));
+
+// Nach einem Kernelneustart können LCN/PCHK-Instanzen wenige Sekunden später
+// aktiv werden als die Jalousieinstanz. Die erneute Prüfung verändert keine
+// gespeicherten Eigenschaften und gibt die Bedienung erst nach erfolgreicher
+// Laufzeitprüfung frei.
+if (IPS_FunctionExists('LCNJAL_CompleteStartupValidation')) {
+    LCNJAL_CompleteStartupValidation($rootID);
+}
+if (IPS_FunctionExists('LCNJAL_IsRuntimePermitted')
+    && !LCNJAL_IsRuntimePermitted($rootID)) {
+    return;
+}
+
 $controllerID = JH_ID($rootID, '06_Skripte', 'Controller');
 IPS_RunScriptWaitEx($controllerID, ['ACTION' => 'HEALTHCHECK']);

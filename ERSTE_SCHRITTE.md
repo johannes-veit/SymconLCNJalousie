@@ -20,7 +20,7 @@ Diese Anleitung führt Sie ohne Git-Vorkenntnisse vom vorbereiteten Ordner bis z
 
 ## B. Ersten Stand speichern und öffentlich veröffentlichen
 
-1. Unten links bei **Summary** tragen Sie ein: `Update Symcon LCN Jalousie 0.1.18`.
+1. Unten links bei **Summary** tragen Sie ein: `Update Symcon LCN Jalousie 0.1.19`.
 2. Klicken Sie auf **Commit to main**.
 3. Klicken Sie oben auf **Publish repository**.
 4. Kontrollieren Sie den Namen `SymconLCNJalousie`.
@@ -104,11 +104,16 @@ Arbeiten Sie die Bereiche von oben nach unten ab:
 Dieser Fehler betraf Version 0.1.2. In Version 0.1.3 wird die Initialkonfiguration des Konfigurators korrekt als JSON-Objekt `{}` ausgegeben. Nach dem Update in der Symcon-Modulverwaltung kann die Zeile „Neue LCN-Jalousie“ über „Alle erstellen“ angelegt werden.
 ## Kachel und erste Referenz
 
-Nach der Installation beziehungsweise dem Update auf 0.1.18 die Jalousieinstanz einmal mit **Übernehmen** neu anwenden und die Kachel-Visualisierung mit `Strg + F5` neu laden. Die Instanz zeigt anschließend die korrigierte HTML-SDK-Kachel: Behang und Lamellen mit fluchtenden Dreispalten-Layouts aus runden Tasten, mittiger Grafik und rechtem Slider, ShakeFree nach Endlage ZU sowie dem kompakten Laufstatus. Der Instanzname wird von Symcon selbst dargestellt und innerhalb der Kachel nicht wiederholt.
+Nach der Installation beziehungsweise dem Update auf 0.1.19 die Jalousieinstanz einmal mit **Übernehmen** neu anwenden und die Kachel-Visualisierung mit `Strg + F5` neu laden. Die Instanz zeigt anschließend die korrigierte HTML-SDK-Kachel: Behang und Lamellen mit fluchtenden Dreispalten-Layouts aus runden Tasten, mittiger Grafik und rechtem Slider, ShakeFree nach Endlage ZU sowie dem kompakten Laufstatus. Der Instanzname wird von Symcon selbst dargestellt und innerhalb der Kachel nicht wiederholt.
 
 Solange `Position gültig` ausgeschaltet ist, sind 0 %/0 % nur Initialwerte und keine bestätigte reale Stellung. Führen Sie als ersten Abgleich im Modul eine **Referenzfahrt AUF** oder **Referenzfahrt AB** aus. Nach dem kontrollierten Fahrtende setzt das Modul 0 %/0 % beziehungsweise 100 %/100 % und schaltet `Position gültig` ein. Ist die Position noch unbekannt, behandelt das Modul den ersten Symcon-Endlagenauftrag auf 0 % oder 100 % automatisch als volle Referenzfahrt mit der passenden richtungsabhängigen Gesamtzeit plus Referenzreserve. Die explizite Referenzfahrt ist für den Erstabgleich trotzdem am klarsten und bewusst auswählbar.
 
 
+
+
+## Neustart nach Backup ab Version 0.1.19
+
+Beim Erstellen eines Symcon-Backups wird der Dienst kurz neu gestartet. Die Jalousieinstanz übernimmt ihre zuletzt gespeicherten Einstellungen unverändert. Während LCN/PCHK noch startet, kann die Kurzinfo vorübergehend **bereit · Startprüfung** anzeigen; die Bedienung bleibt in diesem Moment sicher gesperrt. Sobald Sendemodul, Aktormodul und LCN-Funktionen verfügbar sind, wird die Instanz automatisch freigegeben. Die Konfiguration muss nicht erneut gespeichert werden.
 
 ## Sicherheit ab Version 0.1.13
 

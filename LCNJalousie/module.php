@@ -11,7 +11,7 @@ declare(strict_types=1);
  */
 class LCNJalousie extends IPSModuleStrict
 {
-    private const VERSION = '0.1.18';
+    private const VERSION = '0.1.19';
     private const EXECUTE_PARENT_ACTION = '{7938A5A2-0981-5FE0-BE6C-8AA610D654EB}';
 
     private const STATUS_ACTIVE = 102;
@@ -27,6 +27,14 @@ class LCNJalousie extends IPSModuleStrict
     private const STATUS_STRUCTURE_ERROR = 210;
     private const STATUS_RELAY_CONFLICT = 211;
     private const STATUS_FAULT_LATCHED = 212;
+
+    // Symcon-Nachrichten und Runlevel. Numerisch festgehalten, damit die
+    // Startlogik unabhängig von der Reihenfolge der geladenen PHP-Konstanten
+    // zuverlässig registriert werden kann.
+    private const MESSAGE_KERNEL_STARTED = 10001;
+    private const MESSAGE_INSTANCE_STATUS_CHANGED = 10505;
+    private const KERNEL_READY = 10103;
+    private const STARTUP_VALIDATION_GRACE_SECONDS = 30;
 
     public function Create(): void
     {
@@ -98,6 +106,8 @@ class LCNJalousie extends IPSModuleStrict
         $this->SetVisualizationType(1);
 
         try {
+            $this->registerRuntimeMessages();
+            $this->SetBuffer('StartupValidationDeadline', '0');
             $previousGeneratedVersion = $this->ReadAttributeString('GeneratedVersion');
             $this->ensureProfiles();
             $this->ensureInstanceVisualizationVariables();
@@ -113,7 +123,27 @@ class LCNJalousie extends IPSModuleStrict
             $this->ensureVisualizationLinks($ids['visualization'], $ids['control'], $ids['state']);
             $this->applyVisibility($ids);
 
-            $validation = $this->validateConfiguration();
+            $kernelReady = $this->kernelIsReady();
+            $staticValidation = $this->validateConfiguration(false, false);
+            $runtimeValidation = $kernelReady
+                ? $this->validateConfiguration(true, true)
+                : $staticValidation;
+            $runtimeDependencyUnavailable = $this->isRuntimeDependencyUnavailable(
+                $staticValidation,
+                $runtimeValidation
+            );
+            $startupWaiting = $staticValidation['status'] === self::STATUS_ACTIVE
+                && (!$kernelReady
+                    || ($runtimeDependencyUnavailable && $this->kernelIsWithinStartupGrace()));
+            $validation = $kernelReady ? $runtimeValidation : $staticValidation;
+
+            if ($startupWaiting) {
+                $this->SetBuffer(
+                    'StartupValidationDeadline',
+                    (string) (time() + self::STARTUP_VALIDATION_GRACE_SECONDS)
+                );
+            }
+
             $this->WriteAttributeString('LastValidation', json_encode($validation, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
 
             $moduleEnabled = $this->ReadPropertyBoolean('ModuleEnabled');
@@ -127,6 +157,19 @@ class LCNJalousie extends IPSModuleStrict
             } elseif (!$moduleEnabled) {
                 $this->SetStatus(104);
                 $this->SetSummary('inaktiv · nur LCN-Bedienung');
+            } elseif ($startupWaiting) {
+                // Während KR_INIT beziehungsweise kurz nach KR_READY sind
+                // abhängige LCN-Instanzen und deren PHP-Funktionen noch nicht
+                // zwingend verfügbar. Die gespeicherte Konfiguration bleibt
+                // gültig; Bedienbefehle sind bis zur Abschlussprüfung gesperrt.
+                $this->SetStatus(self::STATUS_ACTIVE);
+                $this->SetSummary('bereit · Startprüfung');
+            } elseif ($runtimeDependencyUnavailable) {
+                // Eine gültig gespeicherte Konfiguration wird nicht als
+                // fehlerhaft markiert, nur weil die abhängige LCN-Laufzeit
+                // momentan noch nicht bereit ist. Bedienung bleibt gesperrt.
+                $this->SetStatus(self::STATUS_ACTIVE);
+                $this->SetSummary('bereit · LCN nicht verfügbar');
             } else {
                 $this->SetStatus($validation['status']);
                 $this->SetSummary($validation['status'] === self::STATUS_ACTIVE ? 'bereit' : 'Konfiguration unvollständig');
@@ -137,11 +180,30 @@ class LCNJalousie extends IPSModuleStrict
             $this->setRuntimeEnabled($runtimeEnabled, $ids['scripts']);
             $this->WriteAttributeBoolean('RuntimeEnabled', $runtimeEnabled);
 
-            if ($wasRuntimeEnabled && !$runtimeEnabled) {
+            if ($kernelReady
+                && ($startupWaiting || $runtimeDependencyUnavailable)
+                && $moduleEnabled
+                && !$faultLatched) {
+                $healthcheckID = @IPS_GetObjectIDByIdent('Healthcheck', $ids['scripts']);
+                if ($healthcheckID !== false && IPS_ScriptExists((int) $healthcheckID)) {
+                    IPS_SetScriptTimer(
+                        (int) $healthcheckID,
+                        $startupWaiting
+                            ? 1
+                            : max(1, $this->ReadPropertyInteger('HealthcheckSeconds'))
+                    );
+                }
+            }
+
+            if ($kernelReady
+                && $wasRuntimeEnabled
+                && !$runtimeEnabled
+                && !$startupWaiting
+                && !$runtimeDependencyUnavailable) {
                 $this->invalidateReferenceWithoutCommand($ids['state'], 'Symcon-Steuerung deaktiviert; lokale LCN-Bedienung bleibt frei');
             }
 
-            if ($runtimeEnabled && !$wasRuntimeEnabled) {
+            if ($kernelReady && $runtimeEnabled && !$wasRuntimeEnabled) {
                 $controllerID = @IPS_GetObjectIDByIdent('Controller', $ids['scripts']);
                 if ($controllerID !== false && IPS_ScriptExists((int) $controllerID)) {
                     IPS_RunScriptWaitEx((int) $controllerID, ['ACTION' => 'INITIALIZE']);
@@ -170,15 +232,181 @@ class LCNJalousie extends IPSModuleStrict
         }
     }
 
+    public function MessageSink(int $TimeStamp, int $SenderID, int $Message, array $Data): void
+    {
+        if ($Message === self::MESSAGE_KERNEL_STARTED) {
+            $this->SetBuffer(
+                'StartupValidationDeadline',
+                (string) (time() + self::STARTUP_VALIDATION_GRACE_SECONDS)
+            );
+            $this->CompleteStartupValidation();
+            return;
+        }
+
+        if ($Message !== self::MESSAGE_INSTANCE_STATUS_CHANGED || !$this->kernelIsReady()) {
+            return;
+        }
+
+        if (!in_array($SenderID, $this->runtimeDependencyInstanceIDs(), true)) {
+            return;
+        }
+
+        $this->CompleteStartupValidation();
+    }
+
+    public function CompleteStartupValidation(): void
+    {
+        if (!$this->kernelIsReady()) {
+            return;
+        }
+
+        try {
+            $scriptsCategoryID = @IPS_GetObjectIDByIdent('06_Skripte', $this->InstanceID);
+            if ($scriptsCategoryID === false) {
+                return;
+            }
+
+            $staticValidation = $this->validateConfiguration(false, false);
+            $runtimeValidation = $this->validateConfiguration(false, true);
+            $deadline = (int) $this->GetBuffer('StartupValidationDeadline');
+            $withinGrace = $deadline > 0 && time() < $deadline;
+            $runtimeDependencyUnavailable = $this->isRuntimeDependencyUnavailable(
+                $staticValidation,
+                $runtimeValidation
+            );
+
+            $this->WriteAttributeString(
+                'LastValidation',
+                json_encode($runtimeValidation, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
+            );
+
+            if ($runtimeDependencyUnavailable && $withinGrace) {
+                // Keine falsche Konfigurationsmeldung während LCN/PCHK seine
+                // Instanzen nach dem Kernelstart noch aktiviert. Bedienung und
+                // Ereignisse bleiben bis zur erfolgreichen Prüfung gesperrt.
+                $this->WriteAttributeBoolean('RuntimeEnabled', false);
+                $this->setRuntimeEnabled(false, (int) $scriptsCategoryID);
+                $healthcheckID = @IPS_GetObjectIDByIdent('Healthcheck', (int) $scriptsCategoryID);
+                if ($healthcheckID !== false && IPS_ScriptExists((int) $healthcheckID)) {
+                    // Das vorhandene Healthcheck-Skript übernimmt während der
+                    // Startphase die kurze Wiederholungsprüfung. Dadurch ist
+                    // kein neu zu migrierender Modultimer erforderlich.
+                    IPS_SetScriptTimer((int) $healthcheckID, 1);
+                }
+
+                if ($this->ReadAttributeBoolean('FaultLatched')) {
+                    $this->SetStatus(self::STATUS_FAULT_LATCHED);
+                    $this->SetSummary('inaktiv · Fehler quittieren');
+                } elseif (!$this->ReadPropertyBoolean('ModuleEnabled')) {
+                    $this->SetStatus(104);
+                    $this->SetSummary('inaktiv · nur LCN-Bedienung');
+                } else {
+                    $this->SetStatus(self::STATUS_ACTIVE);
+                    $this->SetSummary('bereit · Startprüfung');
+                }
+
+                $this->SyncVisualization();
+                return;
+            }
+
+            // Im normalen Betrieb prüft auch der bestehende Healthcheck
+            // die Abhängigkeiten. Solange alles weiterhin bereit ist, werden
+            // weder Ereignisse noch der eventuell laufende 1-s-Worker neu
+            // gesetzt oder unterbrochen.
+            if ($runtimeValidation['status'] === self::STATUS_ACTIVE
+                && $this->ReadPropertyBoolean('ModuleEnabled')
+                && !$this->ReadAttributeBoolean('FaultLatched')
+                && $this->ReadAttributeBoolean('RuntimeEnabled')
+                && $this->GetStatus() === self::STATUS_ACTIVE) {
+                $this->SetBuffer('StartupValidationDeadline', '0');
+                return;
+            }
+
+            $this->SetBuffer('StartupValidationDeadline', '0');
+
+            $wasRuntimeEnabled = $this->ReadAttributeBoolean('RuntimeEnabled');
+            $runtimeEnabled = false;
+
+            if ($this->ReadAttributeBoolean('FaultLatched')) {
+                $this->SetStatus(self::STATUS_FAULT_LATCHED);
+                $this->SetSummary('inaktiv · Fehler quittieren');
+            } elseif (!$this->ReadPropertyBoolean('ModuleEnabled')) {
+                $this->SetStatus(104);
+                $this->SetSummary('inaktiv · nur LCN-Bedienung');
+            } elseif ($runtimeDependencyUnavailable) {
+                // Eine gültig gespeicherte Konfiguration wird nicht als
+                // fehlerhaft markiert, nur weil die abhängige LCN-Laufzeit
+                // momentan noch nicht bereit ist. Bedienung bleibt gesperrt.
+                $this->SetStatus(self::STATUS_ACTIVE);
+                $this->SetSummary('bereit · LCN nicht verfügbar');
+            } else {
+                $this->SetStatus($runtimeValidation['status']);
+                $this->SetSummary(
+                    $runtimeValidation['status'] === self::STATUS_ACTIVE
+                        ? 'bereit'
+                        : 'Konfiguration unvollständig'
+                );
+                $runtimeEnabled = $runtimeValidation['status'] === self::STATUS_ACTIVE;
+            }
+
+            $this->setRuntimeEnabled($runtimeEnabled, (int) $scriptsCategoryID);
+            $this->WriteAttributeBoolean('RuntimeEnabled', $runtimeEnabled);
+
+            if (!$runtimeEnabled
+                && $runtimeDependencyUnavailable
+                && $this->ReadPropertyBoolean('ModuleEnabled')
+                && !$this->ReadAttributeBoolean('FaultLatched')) {
+                $healthcheckID = @IPS_GetObjectIDByIdent('Healthcheck', (int) $scriptsCategoryID);
+                if ($healthcheckID !== false && IPS_ScriptExists((int) $healthcheckID)) {
+                    // Auch nach Ablauf der Startkulanz automatisch weiterprüfen.
+                    // Ein erneutes Speichern der unveränderten Konfiguration ist
+                    // dadurch nicht mehr erforderlich.
+                    IPS_SetScriptTimer(
+                        (int) $healthcheckID,
+                        max(1, $this->ReadPropertyInteger('HealthcheckSeconds'))
+                    );
+                }
+            }
+
+            // Eine vorübergehend noch nicht aktive LCN-Instanz darf weder die
+            // gespeicherten Property-Werte noch eine persistente Referenz
+            // löschen. Sobald alle Abhängigkeiten bereit sind, wird der
+            // Controller genau einmal initialisiert.
+            if ($runtimeEnabled && !$wasRuntimeEnabled) {
+                $controllerID = @IPS_GetObjectIDByIdent('Controller', (int) $scriptsCategoryID);
+                if ($controllerID !== false && IPS_ScriptExists((int) $controllerID)) {
+                    IPS_RunScriptWaitEx((int) $controllerID, ['ACTION' => 'INITIALIZE']);
+                }
+            }
+
+            $this->SyncVisualization();
+        } catch (Throwable $e) {
+            $this->SendDebug('StartupValidation', $e->getMessage(), 0);
+            $this->LogMessage('Startprüfung fehlgeschlagen: ' . $e->getMessage(), 10204);
+        }
+    }
+
     public function GetConfigurationForm(): string
     {
-        $validation = $this->validateConfiguration(false);
+        // Das Formular bewertet die gespeicherten Werte ausschließlich
+        // strukturell. Ein noch startendes oder vorübergehend getrenntes
+        // LCN-Modul darf nicht als fehlende Konfiguration erscheinen.
+        $validation = $this->validateConfiguration(false, false);
+        $runtimeValidation = $this->kernelIsReady()
+            ? $this->validateConfiguration(false, true)
+            : $validation;
+        $runtimeDependencyUnavailable = $this->isRuntimeDependencyUnavailable(
+            $validation,
+            $runtimeValidation
+        );
         $messages = $validation['messages'];
         $faultLatched = $this->ReadAttributeBoolean('FaultLatched');
         $summary = $faultLatched
             ? 'FEHLER VERRIEGELT: ' . ($this->ReadAttributeString('FaultMessage') ?: 'Fehler quittieren. Bis dahin sendet Symcon keine LCN-Befehle.')
             : ($messages === []
-                ? 'Die gespeicherte Konfiguration ist vollständig. Vor dem Motorbetrieb die LCN-PRO-Verriegelung und die TS-Belegung am Bus prüfen.'
+                ? ($runtimeDependencyUnavailable
+                    ? 'Die gespeicherte Konfiguration ist vollständig. LCN ist momentan noch nicht betriebsbereit; die automatische Prüfung läuft weiter.'
+                    : 'Die gespeicherte Konfiguration ist vollständig. Vor dem Motorbetrieb die LCN-PRO-Verriegelung und die TS-Belegung am Bus prüfen.')
                 : "Noch zu erledigen:\n• " . implode("\n• ", $messages));
 
         $softStopRangePercent = static function (int $travelMs, int $softStopMs): float {
@@ -291,7 +519,7 @@ class LCNJalousie extends IPSModuleStrict
                 ['type' => 'Button', 'caption' => 'Diagnose anzeigen', 'onClick' => 'echo LCNJAL_GetDiagnostics($id);'],
             ],
             'status' => [
-                ['code' => self::STATUS_ACTIVE, 'icon' => 'active', 'caption' => 'Konfiguration vollständig – Laufzeit freigegeben'],
+                ['code' => self::STATUS_ACTIVE, 'icon' => 'active', 'caption' => 'Gespeicherte Konfiguration vollständig'],
                 ['code' => 104, 'icon' => 'inactive', 'caption' => 'Symcon-Steuerung deaktiviert – lokale LCN-Bedienung bleibt aktiv'],
                 ['code' => self::STATUS_SEND_MODULE_MISSING, 'icon' => 'error', 'caption' => 'LCN-Sendemodul fehlt oder ist ungültig'],
                 ['code' => self::STATUS_ACTOR_MODULE_MISSING, 'icon' => 'error', 'caption' => 'LCN-Aktormodul fehlt oder ist ungültig'],
@@ -444,6 +672,7 @@ class LCNJalousie extends IPSModuleStrict
     {
         return $this->ReadPropertyBoolean('ModuleEnabled')
             && !$this->ReadAttributeBoolean('FaultLatched')
+            && $this->ReadAttributeBoolean('RuntimeEnabled')
             && $this->GetStatus() === self::STATUS_ACTIVE;
     }
 
@@ -536,7 +765,14 @@ class LCNJalousie extends IPSModuleStrict
         $this->SetValue('Referenziert', $referenced);
 
         if ($this->GetStatus() === self::STATUS_ACTIVE) {
-            $this->SetSummary($referenced ? 'bereit · Position gültig' : 'bereit · Referenz erforderlich');
+            $startupValidationPending = (int) $this->GetBuffer('StartupValidationDeadline') > time();
+            $this->SetSummary(
+                $this->ReadAttributeBoolean('RuntimeEnabled')
+                    ? ($referenced ? 'bereit · Position gültig' : 'bereit · Referenz erforderlich')
+                    : ($startupValidationPending
+                        ? 'bereit · Startprüfung'
+                        : 'bereit · LCN nicht verfügbar')
+            );
         }
 
         // Laufzeitwerte an alle geöffneten HTML-SDK-Kacheln senden.
@@ -578,10 +814,17 @@ class LCNJalousie extends IPSModuleStrict
 
     public function CheckConfiguration(): string
     {
-        $result = $this->validateConfiguration();
+        $result = $this->validateConfiguration(false, false);
+        $runtimeResult = $this->kernelIsReady()
+            ? $this->validateConfiguration(false, true)
+            : $result;
+        $runtimeDependencyUnavailable = $this->isRuntimeDependencyUnavailable($result, $runtimeResult);
         $lines = ['LCN Jalousie – Konfigurationsprüfung', 'Statuscode: ' . $result['status']];
         if ($result['messages'] === []) {
-            $lines[] = 'Ergebnis: vollständig.';
+            $lines[] = 'Ergebnis: gespeicherte Konfiguration vollständig.';
+            if ($runtimeDependencyUnavailable) {
+                $lines[] = 'Laufzeitstatus: LCN momentan noch nicht betriebsbereit; automatische Prüfung läuft.';
+            }
         } else {
             $lines[] = 'Ergebnis: nicht vollständig.';
             foreach ($result['messages'] as $message) {
@@ -737,7 +980,10 @@ class LCNJalousie extends IPSModuleStrict
         $rotation = max(0.0, min(100.0, $rotation));
         $moduleEnabled = $this->ReadPropertyBoolean('ModuleEnabled');
         $faultLatched = $this->ReadAttributeBoolean('FaultLatched');
-        $active = $moduleEnabled && !$faultLatched && $this->GetStatus() === self::STATUS_ACTIVE;
+        $active = $moduleEnabled
+            && !$faultLatched
+            && $this->ReadAttributeBoolean('RuntimeEnabled')
+            && $this->GetStatus() === self::STATUS_ACTIVE;
         $controlsEnabled = $active && !in_array($phase, [7, 9, 10], true);
         $positionTolerance = max(0.1, $this->ReadPropertyFloat('PositionTolerance'));
         $intermediateAllowed = $controlsEnabled && ($referenced || $this->ReadPropertyBoolean('AllowUnreferenced'));
@@ -824,7 +1070,59 @@ class LCNJalousie extends IPSModuleStrict
         ];
     }
 
-    private function validateConfiguration(bool $checkLiveRelayState = true): array
+    private function kernelIsReady(): bool
+    {
+        return IPS_GetKernelRunlevel() === self::KERNEL_READY;
+    }
+
+    private function kernelIsWithinStartupGrace(): bool
+    {
+        $kernelStart = IPS_GetKernelStartTime();
+        return $kernelStart > 0
+            && time() < $kernelStart + self::STARTUP_VALIDATION_GRACE_SECONDS;
+    }
+
+    private function isRuntimeDependencyUnavailable(
+        array $staticValidation,
+        array $runtimeValidation
+    ): bool {
+        return $staticValidation['status'] === self::STATUS_ACTIVE
+            && in_array($runtimeValidation['status'], [
+                self::STATUS_SEND_MODULE_MISSING,
+                self::STATUS_ACTOR_MODULE_MISSING,
+                self::STATUS_GT8_INVALID,
+                self::STATUS_LCN_FUNCTION_MISSING,
+            ], true);
+    }
+
+    private function registerRuntimeMessages(): void
+    {
+        $this->RegisterMessage(0, self::MESSAGE_KERNEL_STARTED);
+        foreach ($this->runtimeDependencyInstanceIDs() as $instanceID) {
+            $this->RegisterMessage($instanceID, self::MESSAGE_INSTANCE_STATUS_CHANGED);
+        }
+    }
+
+    private function runtimeDependencyInstanceIDs(): array
+    {
+        return array_values(array_unique(array_filter([
+            $this->ReadPropertyInteger('LCNSendModuleID'),
+            $this->ReadPropertyInteger('LCNActorModuleID'),
+            $this->findConnectedLcnModuleForVariable(
+                $this->ReadPropertyInteger('GT8LongUpVariableID'),
+                false
+            ),
+            $this->findConnectedLcnModuleForVariable(
+                $this->ReadPropertyInteger('GT8LongDownVariableID'),
+                false
+            ),
+        ], static fn (int $id): bool => $id > 0 && IPS_InstanceExists($id))));
+    }
+
+    private function validateConfiguration(
+        bool $checkLiveRelayState = true,
+        bool $checkRuntimeAvailability = true
+    ): array
     {
         $messages = [];
         $status = self::STATUS_ACTIVE;
@@ -842,13 +1140,13 @@ class LCNJalousie extends IPSModuleStrict
             }
         }
 
-        if ($sendModule > 0 && IPS_InstanceExists($sendModule) && !$this->isUsableLcnModule($sendModule)) {
+        if ($sendModule > 0 && IPS_InstanceExists($sendModule) && !$this->isUsableLcnModule($sendModule, $checkRuntimeAvailability)) {
             $messages[] = 'Das ausgewählte Sendemodul ist keine aktive LCN-Modul-/Splitterinstanz (Modultyp 2, Status 102).';
             if ($status === self::STATUS_ACTIVE) {
                 $status = self::STATUS_SEND_MODULE_MISSING;
             }
         }
-        if ($actorModule > 0 && IPS_InstanceExists($actorModule) && !$this->isUsableLcnModule($actorModule)) {
+        if ($actorModule > 0 && IPS_InstanceExists($actorModule) && !$this->isUsableLcnModule($actorModule, $checkRuntimeAvailability)) {
             $messages[] = 'Das ausgewählte Aktormodul ist keine aktive LCN-Modul-/Splitterinstanz (Modultyp 2, Status 102).';
             if ($status === self::STATUS_ACTIVE) {
                 $status = self::STATUS_ACTOR_MODULE_MISSING;
@@ -903,20 +1201,23 @@ class LCNJalousie extends IPSModuleStrict
         // GT8-Taste am Haupt-UPU programmiert ist. Eine Bindung an
         // LCNSendModuleID wäre daher fachlich falsch.
 
-        if ($this->isBooleanVariable($gt8Up) && $this->findConnectedLcnModuleForVariable($gt8Up) <= 0) {
+        if ($this->isBooleanVariable($gt8Up) && $this->findConnectedLcnModuleForVariable($gt8Up, $checkRuntimeAvailability) <= 0) {
             $messages[] = 'GT8 LANG AUF ist mit keiner aktiven LCN-Modulinstanz verbunden.';
             if ($status === self::STATUS_ACTIVE) {
                 $status = self::STATUS_GT8_INVALID;
             }
         }
-        if ($this->isBooleanVariable($gt8Down) && $this->findConnectedLcnModuleForVariable($gt8Down) <= 0) {
+        if ($this->isBooleanVariable($gt8Down) && $this->findConnectedLcnModuleForVariable($gt8Down, $checkRuntimeAvailability) <= 0) {
             $messages[] = 'GT8 LANG ZU ist mit keiner aktiven LCN-Modulinstanz verbunden.';
             if ($status === self::STATUS_ACTIVE) {
                 $status = self::STATUS_GT8_INVALID;
             }
         }
 
-        if (!IPS_FunctionExists('LCN_SendCommand') || ($this->ReadPropertyBoolean('RequestStatusOnStart') && !IPS_FunctionExists('LCN_RequestStatus'))) {
+        if ($checkRuntimeAvailability
+            && (!IPS_FunctionExists('LCN_SendCommand')
+                || ($this->ReadPropertyBoolean('RequestStatusOnStart')
+                    && !IPS_FunctionExists('LCN_RequestStatus')))) {
             $messages[] = 'LCN_SendCommand beziehungsweise LCN_RequestStatus ist nicht verfügbar.';
             if ($status === self::STATUS_ACTIVE) {
                 $status = self::STATUS_LCN_FUNCTION_MISSING;
@@ -967,7 +1268,7 @@ class LCNJalousie extends IPSModuleStrict
             && (int) IPS_GetVariable($variableID)['VariableType'] === 0;
     }
 
-    private function isUsableLcnModule(int $instanceID): bool
+    private function isUsableLcnModule(int $instanceID, bool $requireActiveStatus = true): bool
     {
         if (!IPS_InstanceExists($instanceID)) {
             return false;
@@ -977,7 +1278,7 @@ class LCNJalousie extends IPSModuleStrict
         $moduleType = (int) ($instance['ModuleInfo']['ModuleType'] ?? -1);
         return $moduleType === 2
             && stripos($moduleName, 'LCN') !== false
-            && (int) $instance['InstanceStatus'] === 102;
+            && (!$requireActiveStatus || (int) $instance['InstanceStatus'] === self::STATUS_ACTIVE);
     }
 
     private function variableBelongsToInstanceChain(int $variableID, int $expectedInstanceID): bool
@@ -1031,7 +1332,10 @@ class LCNJalousie extends IPSModuleStrict
         return false;
     }
 
-    private function findConnectedLcnModuleForVariable(int $variableID): int
+    private function findConnectedLcnModuleForVariable(
+        int $variableID,
+        bool $requireActiveStatus = true
+    ): int
     {
         if (!IPS_VariableExists($variableID)) {
             return 0;
@@ -1056,7 +1360,7 @@ class LCNJalousie extends IPSModuleStrict
                     }
                     $connectionVisited[$currentInstanceID] = true;
 
-                    if ($this->isUsableLcnModule($currentInstanceID)) {
+                    if ($this->isUsableLcnModule($currentInstanceID, $requireActiveStatus)) {
                         return $currentInstanceID;
                     }
 

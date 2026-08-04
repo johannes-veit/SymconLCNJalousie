@@ -57,7 +57,7 @@ Eine ausführliche Anleitung steht in [ERSTE_SCHRITTE.md](ERSTE_SCHRITTE.md).
 
 ## Entwicklungsstand
 
-**0.1.18 – öffentliche Beta.** Der Runtime-Kern basiert auf der tiefengeprüften V11.3-Skriptfassung. Das Modul automatisiert deren Aufbau und Konfiguration. Vor einem produktiven Motorbetrieb bleiben reale Tests mit Symcon 9.0, PCHK/PCK, LCN-Bus, Relais, Motor und Endlagen zwingend.
+**0.1.19 – öffentliche Beta.** Der Runtime-Kern basiert auf der tiefengeprüften V11.3-Skriptfassung. Das Modul automatisiert deren Aufbau und Konfiguration. Vor einem produktiven Motorbetrieb bleiben reale Tests mit Symcon 9.0, PCHK/PCK, LCN-Bus, Relais, Motor und Endlagen zwingend.
 
 ## Lizenz
 
@@ -74,6 +74,11 @@ Ist `Position gültig` noch `false`, wird der erste Endlagenauftrag auf 0 % oder
 
 Der STOP-Taster der Kachel ist kein separater LCN-STOP-Befehl. Der Controller wertet die realen Relaisrückmeldungen aus und sendet den KURZ-Befehl der tatsächlich aktiven Richtung erneut, sodass das aktive LCN-Relais ausgeschaltet wird.
 
+
+
+## Verhalten nach Symcon-Neustart
+
+Ab Version 0.1.19 wird eine gespeicherte, vollständige Konfiguration während des Symcon-Starts nicht mehr wegen der vorübergehend noch inaktiven LCN/PCHK-Instanzen als fehlerhaft markiert. Während `KR_INIT` prüft das Modul nur die dauerhaft gespeicherten IDs und deren strukturelle Zuordnung. Nach `IPS_KERNELSTARTED` folgt automatisch die vollständige Laufzeitprüfung. Benötigt das LCN-Sendemodul noch einige Sekunden, bleibt die Instanz mit Status 102 als konfiguriert sichtbar; die Bedienung und Ereignisse sind bis zur Freigabe trotzdem gesperrt. Der Healthcheck und Statusänderungen der beteiligten LCN-Instanzen wiederholen die Prüfung automatisch; ein erneutes Öffnen und Speichern der unveränderten Konfiguration ist nicht erforderlich. Die gespeicherten Eigenschaften und eine gültige Positionsreferenz bleiben erhalten.
 
 ## Symcon-Themefarben
 

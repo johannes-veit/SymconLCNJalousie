@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.19 – 2026-08-04
+
+- Neustartvalidierung korrigiert: Während `KR_INIT` werden gespeicherte LCN-Instanz-IDs nur strukturell geprüft; der vorübergehende Fremdinstanzstatus und noch nicht registrierte LCN-PHP-Funktionen erzeugen keine falsche Meldung „Konfiguration unvollständig“.
+- Nach `IPS_KERNELSTARTED` wird die vollständige Laufzeitprüfung automatisch erneut ausgeführt. Statusänderungen der ausgewählten LCN-Sende-, Aktor- und GT8-Quellmodule lösen ebenfalls eine erneute Prüfung aus.
+- Für verzögert startende LCN/PCHK-Instanzen gilt eine 30-sekündige Startkulanz. Die Instanz bleibt dabei als konfiguriert sichtbar, Bedienung und Ereignisse sind bis zur erfolgreichen Prüfung sicher gesperrt.
+- Der vorhandene Healthcheck wiederholt die Laufzeitprüfung automatisch. Sobald das Sendemodul bereit ist, wird die Instanz ohne erneutes Speichern der unveränderten Konfiguration freigegeben und der Controller initialisiert.
+- Eine nur vorübergehend nicht verfügbare LCN-Laufzeit setzt keinen Fehlerstatus „Konfiguration unvollständig“. Die Instanz bleibt mit Status 102 als gespeichert vollständig gekennzeichnet; Ereignisse und Bedienbefehle bleiben trotzdem bis zur Laufzeitfreigabe gesperrt.
+- Gespeicherte Modul-Properties und eine persistente Positionsreferenz werden durch vorübergehende Startzustände nicht gelöscht oder verändert. Ein echter statischer Konfigurationsfehler wird weiterhin sofort angezeigt.
+- Die Sanft-Stopp- und Fahrwegberechnung aus 0.1.18 blieb unverändert.
+
 ## 0.1.18 – 2026-08-04
 
 - Sanft-Stopp auf ein positionsabhängiges Fahrwegmodell umgestellt: Aus richtungsabhängiger Behanglaufzeit `T` und Sanft-Stopp-Zeit `S` wird der Endzonenanteil mit `S / (2*T - S)` berechnet.

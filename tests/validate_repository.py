@@ -61,6 +61,15 @@ def check_php() -> None:
         if result.returncode != 0:
             ERRORS.append(f'{path.relative_to(ROOT)}: {result.stdout}{result.stderr}')
 
+    restart_test = ROOT / 'tests' / 'restart_lifecycle_test.php'
+    if restart_test.is_file():
+        result = subprocess.run(['php', str(restart_test)], capture_output=True, text=True)
+        if result.returncode != 0 or 'RESTART LIFECYCLE TEST OK' not in result.stdout:
+            ERRORS.append(
+                f'{restart_test.relative_to(ROOT)}: restart lifecycle test failed: '
+                f'{result.stdout}{result.stderr}'
+            )
+
 
 def check_module_identity(module_dir: Path) -> None:
     metadata_path = module_dir / 'module.json'
@@ -797,6 +806,96 @@ def check_reference_persistence_and_relay_off() -> None:
         ERRORS.append(f'{worker_path.relative_to(ROOT)}: primary worker timer missing')
 
 
+
+
+def check_restart_validation_lifecycle() -> None:
+    module_path = ROOT / 'LCNJalousie' / 'module.php'
+    healthcheck_path = ROOT / 'LCNJalousie' / 'scripts' / 'Healthcheck.php'
+    if not module_path.is_file() or not healthcheck_path.is_file():
+        return
+
+    module = module_path.read_text(encoding='utf-8')
+    healthcheck = healthcheck_path.read_text(encoding='utf-8')
+
+    required_module = [
+        'private const MESSAGE_KERNEL_STARTED = 10001;',
+        'private const MESSAGE_INSTANCE_STATUS_CHANGED = 10505;',
+        'private const KERNEL_READY = 10103;',
+        'private const STARTUP_VALIDATION_GRACE_SECONDS = 30;',
+        'public function MessageSink(int $TimeStamp, int $SenderID, int $Message, array $Data): void',
+        '$this->RegisterMessage(0, self::MESSAGE_KERNEL_STARTED);',
+        '$this->RegisterMessage($instanceID, self::MESSAGE_INSTANCE_STATUS_CHANGED);',
+        '$staticValidation = $this->validateConfiguration(false, false);',
+        '? $this->validateConfiguration(true, true)',
+        '$runtimeValidation = $this->validateConfiguration(false, true);',
+        '$this->isRuntimeDependencyUnavailable(',
+        '$this->kernelIsWithinStartupGrace()',
+        "self::STATUS_SEND_MODULE_MISSING,",
+        "self::STATUS_ACTOR_MODULE_MISSING,",
+        "self::STATUS_LCN_FUNCTION_MISSING,",
+        "$this->SetSummary('bereit · Startprüfung');",
+        "$this->SetSummary('bereit · LCN nicht verfügbar');",
+        "$startupValidationPending = (int) $this->GetBuffer('StartupValidationDeadline') > time();",
+        "Ergebnis: gespeicherte Konfiguration vollständig.",
+        "$validation = $this->validateConfiguration(false, false);",
+        "&& $this->ReadAttributeBoolean('RuntimeEnabled')",
+        "IPS_RunScriptWaitEx((int) $controllerID, ['ACTION' => 'INITIALIZE']);",
+        "max(1, $this->ReadPropertyInteger('HealthcheckSeconds'))",
+    ]
+    for pattern in required_module:
+        if pattern not in module:
+            ERRORS.append(f'{module_path.relative_to(ROOT)}: restart lifecycle protection missing ({pattern})')
+
+    forbidden_runtime_error_status = "elseif ($runtimeDependencyUnavailable) {\n                $this->SetStatus($runtimeValidation['status']);"
+    if forbidden_runtime_error_status in module:
+        ERRORS.append(
+            f'{module_path.relative_to(ROOT)}: temporary LCN runtime loss must not be reported as incomplete saved configuration'
+        )
+
+    apply_start = module.find('public function ApplyChanges')
+    apply_end = module.find('public function MessageSink', apply_start)
+    if apply_start >= 0 and apply_end > apply_start:
+        apply_body = module[apply_start:apply_end]
+        required_reference_guards = [
+            '&& !$startupWaiting',
+            '&& !$runtimeDependencyUnavailable',
+        ]
+        for guard in required_reference_guards:
+            if guard not in apply_body:
+                ERRORS.append(
+                    f'{module_path.relative_to(ROOT)}: transient restart state must not invalidate the persistent reference ({guard})'
+                )
+
+    startup_start = module.find('public function CompleteStartupValidation')
+    startup_end = module.find('public function GetConfigurationForm', startup_start)
+    if startup_start >= 0 and startup_end > startup_start:
+        startup_body = module[startup_start:startup_end]
+        if 'invalidateReferenceWithoutCommand' in startup_body or 'persistReferenceInvalid' in startup_body:
+            ERRORS.append(
+                f'{module_path.relative_to(ROOT)}: transient restart validation must not erase reference data'
+            )
+        if 'IPS_SetProperty' in startup_body or 'WriteProperty' in startup_body:
+            ERRORS.append(
+                f'{module_path.relative_to(ROOT)}: restart validation must not alter saved module properties'
+            )
+
+    required_healthcheck = [
+        "IPS_FunctionExists('LCNJAL_CompleteStartupValidation')",
+        'LCNJAL_CompleteStartupValidation($rootID);',
+        "IPS_FunctionExists('LCNJAL_IsRuntimePermitted')",
+        '!LCNJAL_IsRuntimePermitted($rootID)',
+    ]
+    for pattern in required_healthcheck:
+        if pattern not in healthcheck:
+            ERRORS.append(
+                f'{healthcheck_path.relative_to(ROOT)}: automatic restart revalidation missing ({pattern})'
+            )
+
+    if healthcheck.find('LCNJAL_CompleteStartupValidation($rootID);') > healthcheck.find("IPS_RunScriptWaitEx($controllerID, ['ACTION' => 'HEALTHCHECK']);"):
+        ERRORS.append(
+            f'{healthcheck_path.relative_to(ROOT)}: startup validation must run before the controller healthcheck'
+        )
+
 def main() -> int:
     check_required()
     check_root_structure()
@@ -814,6 +913,7 @@ def main() -> int:
     check_soft_stop_model()
     check_calibration_window_and_fault_latch()
     check_reference_persistence_and_relay_off()
+    check_restart_validation_lifecycle()
     check_php()
     if ERRORS:
         print('VALIDATION FAILED')
