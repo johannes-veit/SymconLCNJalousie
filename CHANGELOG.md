@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.1.18 – 2026-08-04
+
+- Sanft-Stopp auf ein positionsabhängiges Fahrwegmodell umgestellt: Aus richtungsabhängiger Behanglaufzeit `T` und Sanft-Stopp-Zeit `S` wird der Endzonenanteil mit `S / (2*T - S)` berechnet.
+- Die berechnete Endzone gilt für jede Fahrt in Richtung der jeweiligen Endlage. Außerhalb der Zone bleibt die Geschwindigkeit konstant; innerhalb wird nur der bis zur Zielposition tatsächlich durchfahrene Anteil der linearen Verzögerung berücksichtigt.
+- Zwischenziele erhalten keine eigene Ziel-Abbremsung. Liegt ein Ziel jedoch physisch in der Endzone, berücksichtigt die Zeitberechnung die dort bereits reduzierte Geschwindigkeit: am Zonenbeginn 0 ms, an der Endlage die vollständige Sanft-Stopp-Zeit.
+- Konfigurationsformular und Diagnose zeigen die berechneten Prozentbereiche für AUF und ZU an.
+- Controller und Worker verwenden dieselbe Vorwärts-/Rückwärtskennlinie. Regressionstests prüfen unter anderem eine synthetische 5-%-Endzone mit Zielen 95/96/97/98/99/100 %, beide Richtungen, deaktivierten Sanft-Stopp und die mathematische Invertierbarkeit.
+- Nach dem Update wird die Positionsreferenz einmalig verworfen, da sich die Zeit-Weg-Kennlinie gegenüber 0.1.15–0.1.17 geändert hat.
+
+## 0.1.17 – 2026-08-04
+
+- Sanft-Stopp-Modell korrigiert: Die lineare Verzögerung wird nur bei echten Endlagen-/Referenzaufträgen auf 0 % AUF beziehungsweise 100 % ZU verwendet.
+- Zwischenpositionen werden auch innerhalb der letzten Prozent ohne künstliche Ziel-Abbremsung mit voller Geschwindigkeit berechnet und durch den Symcon-STOP beendet.
+- Die volle Fahrgeschwindigkeit wird weiterhin aus der gemessenen Endlagenlaufzeit abzüglich der dreieckigen Sanft-Stopp-Fläche abgeleitet; dadurch bleibt die Prozentberechnung im übrigen Fahrbereich genauer.
+- Controller und 1-s-Worker verwenden wieder dieselbe, auftragsabhängige Berechnung. Zusätzliche Regressionstests prüfen Zwischenziel, Endlagenziel, Vorwärts-/Rückwärtskennlinie und deaktivierten Sanft-Stopp.
+- Gegenüber 0.1.15 bleiben Sicherheits-, Referenz-, Relais- und Ablaufsteuerung unverändert; geändert wurde ausschließlich die richtungsabhängige Zeit-/Positionsberechnung.
+
+## 0.1.16 – 2026-08-04
+
+- Richtungsabhängigen Sanft-Stopp für den Behang ergänzt: `Sanft-Stopp vor Endlage AUF` und `Sanft-Stopp vor Endlage ZU`, jeweils standardmäßig 4.500 ms und separat einstellbar.
+- Die Geschwindigkeitsreduzierung wirkt ausschließlich unmittelbar vor der angefahrenen Endlage und fällt innerhalb der eingestellten Zeit linear von voller Geschwindigkeit auf 0.
+- Positionsfortschreibung und Zielzeitberechnung verwenden dieselbe nichtlineare Weg-Zeit-Kennlinie. Zwischenpositionen außerhalb der Endzonen werden dadurch genauer berechnet.
+- Fahrten zu Zwischenpositionen innerhalb einer Sanft-Stopp-Zone werden über die inverse Kennlinie terminiert, statt weiterhin eine konstante Geschwindigkeit anzunehmen.
+- Diagnose und Repository-Prüfung um Konfiguration, Plausibilitätsprüfung und mathematische Vorwärts-/Rückwärtsprüfung des Sanft-Stopp-Modells erweitert.
+- Eine bestehende gültige Endlagenreferenz bleibt beim Update erhalten; die neue Kennlinie ändert die physische Bedeutung von 0 % und 100 % nicht.
+
 ## 0.1.15 – 2026-08-04
 
 - Kritischen Referenzverlust behoben: Der LCN-Statusabgleich und ein normales `ApplyChanges` setzen `Position referenziert` nicht mehr pauschal auf `false`.

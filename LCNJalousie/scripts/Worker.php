@@ -188,6 +188,86 @@ function JW_DirectionalBlindTravelMs(int $rootID, int $state, float $turnMs): fl
         : $totalDownMs;
 }
 
+function JW_DirectionalSoftStopMs(int $rootID, int $state, float $blindTravelMs): float
+{
+    $ident = $state === 1 ? 'Sanftstopp_AUF_ms' : 'Sanftstopp_ZU_ms';
+    $softStopMs = (float) GetValueInteger(JW_ID($rootID, '01_Konfiguration', $ident));
+
+    if ($softStopMs < 0.0 || $softStopMs >= $blindTravelMs) {
+        return 0.0;
+    }
+
+    return $softStopMs;
+}
+
+
+function JW_DirectionalSoftStopRangePercent(float $blindTravelMs, float $softStopMs): float
+{
+    if ($blindTravelMs <= 0.0 || $softStopMs <= 0.0 || $softStopMs >= $blindTravelMs) {
+        return 0.0;
+    }
+
+    return 100.0 * $softStopMs / (2.0 * $blindTravelMs - $softStopMs);
+}
+
+function JW_BlindTimeCoordinateMs(float $position, int $state, float $blindTravelMs, float $softStopMs): float
+{
+    $position = JW_Clamp($position);
+    $progress = $state === 1
+        ? (100.0 - $position) / 100.0
+        : $position / 100.0;
+
+    if ($softStopMs <= 0.0) {
+        return $progress * $blindTravelMs;
+    }
+
+    $effectiveTravelMs = $blindTravelMs - $softStopMs / 2.0;
+    $distanceAtFullSpeed = $progress * $effectiveTravelMs;
+    $softStopStartMs = $blindTravelMs - $softStopMs;
+    $softStopRange = JW_DirectionalSoftStopRangePercent($blindTravelMs, $softStopMs) / 100.0;
+    $softStopStartProgress = 1.0 - $softStopRange;
+
+    if ($progress <= $softStopStartProgress) {
+        return $distanceAtFullSpeed;
+    }
+
+    $softDistance = min(
+        $softStopMs / 2.0,
+        max(0.0, $distanceAtFullSpeed - $softStopStartMs)
+    );
+    $discriminant = max(0.0, $softStopMs * $softStopMs - 2.0 * $softStopMs * $softDistance);
+    $softElapsedMs = $softStopMs - sqrt($discriminant);
+
+    return $softStopStartMs + $softElapsedMs;
+}
+
+function JW_BlindPositionAtTimeCoordinate(float $timeCoordinateMs, int $state, float $blindTravelMs, float $softStopMs): float
+{
+    $timeCoordinateMs = max(0.0, min($blindTravelMs, $timeCoordinateMs));
+
+    if ($softStopMs <= 0.0) {
+        $progress = $timeCoordinateMs / $blindTravelMs;
+    } else {
+        $effectiveTravelMs = $blindTravelMs - $softStopMs / 2.0;
+        $softStopStartMs = $blindTravelMs - $softStopMs;
+
+        if ($timeCoordinateMs <= $softStopStartMs) {
+            $distanceAtFullSpeed = $timeCoordinateMs;
+        } else {
+            $softElapsedMs = $timeCoordinateMs - $softStopStartMs;
+            $distanceAtFullSpeed = $softStopStartMs
+                + $softElapsedMs
+                - ($softElapsedMs * $softElapsedMs) / (2.0 * $softStopMs);
+        }
+        $progress = $distanceAtFullSpeed / $effectiveTravelMs;
+    }
+
+    $progress = max(0.0, min(1.0, $progress));
+    return $state === 1
+        ? 100.0 * (1.0 - $progress)
+        : 100.0 * $progress;
+}
+
 function JW_UpdatePosition(int $rootID, int $state, float $now): void
 {
     $startMs = GetValueFloat(JW_ID($rootID, '05_Intern', 'Startzeit_ms'));
@@ -213,8 +293,18 @@ function JW_UpdatePosition(int $rootID, int $state, float $now): void
 
     $blindStartDelay = JW_BlindStartDelayMs($rootID, $startBlind, $startSlat, $state, $turnMs);
     $blindElapsed = max(0.0, $elapsed - $blindStartDelay);
-    $blindDelta = 100.0 * $blindElapsed / $blindTravelMs;
-    $blind = $state === 1 ? $startBlind - $blindDelta : $startBlind + $blindDelta;
+    $softStopMs = JW_DirectionalSoftStopMs($rootID, $state, $blindTravelMs);
+
+    // Positionsabhängige Kennlinie für jede Fahrt: Außerhalb der Endzone volle
+    // Geschwindigkeit, innerhalb der Endzone der bis zur aktuellen Position
+    // durchfahrene Anteil des linearen Sanft-Stopps.
+    $blindStartCoordinateMs = JW_BlindTimeCoordinateMs($startBlind, $state, $blindTravelMs, $softStopMs);
+    $blind = JW_BlindPositionAtTimeCoordinate(
+        $blindStartCoordinateMs + $blindElapsed,
+        $state,
+        $blindTravelMs,
+        $softStopMs
+    );
 
     SetValueFloat(JW_ID($rootID, '04_Istwerte', 'Ist_Lamelle'), JW_Clamp($slat));
     SetValueFloat(JW_ID($rootID, '04_Istwerte', 'Ist_Behang'), JW_Clamp($blind));

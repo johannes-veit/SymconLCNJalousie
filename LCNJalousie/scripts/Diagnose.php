@@ -161,7 +161,8 @@ $variableSchema = [
         'GT8_LANG_AUF_ID' => 1, 'GT8_LANG_AB_ID' => 1,
         'TS_KURZ_AUF' => 3, 'TS_KURZ_AB' => 3,
         'Gesamtlaufzeit_ms' => 1, 'Wendezeit_ms' => 1,
-        'Sanftanlauf_ms' => 1, 'Behanglaufzeit_ms' => 1, 'Referenzreserve_ms' => 1,
+        'Sanftanlauf_ms' => 1, 'Sanftstopp_AUF_ms' => 1, 'Sanftstopp_ZU_ms' => 1,
+        'Behanglaufzeit_ms' => 1, 'Referenzreserve_ms' => 1,
         'MaxFahrt_ms' => 1, 'ShakeFree_ms' => 1, 'ShakeFree_Pause_ms' => 1,
         'Kalibrierfenster_ms' => 1,
         'Relaisbestaetigung_ms' => 1, 'Stoppbestaetigung_ms' => 1,
@@ -296,6 +297,8 @@ if ($errors === []) {
 
     $turn = GetValueInteger((int) JD_ID($rootID, '01_Konfiguration', 'Wendezeit_ms'));
     $softStart = GetValueInteger((int) JD_ID($rootID, '01_Konfiguration', 'Sanftanlauf_ms'));
+    $softStopUp = GetValueInteger((int) JD_ID($rootID, '01_Konfiguration', 'Sanftstopp_AUF_ms'));
+    $softStopDown = GetValueInteger((int) JD_ID($rootID, '01_Konfiguration', 'Sanftstopp_ZU_ms'));
     // Kompatible Idents: Gesamtlaufzeit_ms = 100 % ZU -> 0 % AUF inkl.
     // Wendezeit; Behanglaufzeit_ms = 0 % AUF -> 100 % ZU.
     $totalUp = GetValueInteger((int) JD_ID($rootID, '01_Konfiguration', 'Gesamtlaufzeit_ms'));
@@ -319,8 +322,8 @@ if ($errors === []) {
     JD_Add($info, 'Symcon-Steuerung: ' . ($moduleEnabled ? 'aktiv konfiguriert' : 'im Modulmenue deaktiviert'));
     JD_Add($info, 'Fehlerverriegelung: ' . ($faultLatched ? 'AKTIV – Quittierung erforderlich' : 'nicht aktiv'));
 
-    if ($turn <= 0 || $softStart < 0 || $totalUp <= 0 || $totalDown <= 0 || $blindUp <= 0 || $blindDown <= 0 || $max <= 0) {
-        JD_Add($errors, 'Wendezeit, beide Richtungs-Gesamtzeiten, abgeleitete Behanglaufzeiten und Maximalfahrzeit muessen positiv sein; Sanftanlauf darf 0 sein.');
+    if ($turn <= 0 || $softStart < 0 || $softStopUp < 0 || $softStopDown < 0 || $totalUp <= 0 || $totalDown <= 0 || $blindUp <= 0 || $blindDown <= 0 || $max <= 0) {
+        JD_Add($errors, 'Wendezeit, beide Richtungs-Gesamtzeiten, abgeleitete Behanglaufzeiten und Maximalfahrzeit muessen positiv sein; Sanftanlauf und Sanft-Stopp duerfen 0 sein.');
     }
     if ($softStart > $turn) {
         JD_Add($errors, 'Sanftanlauf_ms darf die volle Wendezeit nicht ueberschreiten.');
@@ -328,8 +331,17 @@ if ($errors === []) {
     if ($totalUp <= $turn) {
         JD_Add($errors, 'Gesamtzeit 100→0 AUF muss groesser als die volle Wendezeit sein.');
     }
-    JD_Add($info, 'Gesamtzeit 100→0 AUF inkl. Wendezeit: ' . $totalUp . ' ms; abgeleitete Behanglaufzeit AUF: ' . $blindUp . ' ms.');
-    JD_Add($info, 'Gesamtzeit 0→100 ZU: ' . $totalDown . ' ms; abgeleitete Behanglaufzeit ZU: ' . $blindDown . ' ms.');
+    if ($softStopUp >= $blindUp || $softStopDown >= $blindDown) {
+        JD_Add($errors, 'Sanftstopp_AUF_ms und Sanftstopp_ZU_ms muessen jeweils kleiner als die zugehoerige Behanglaufzeit sein.');
+    }
+    $softStopUpPercent = ($blindUp > 0 && $softStopUp > 0 && $softStopUp < $blindUp)
+        ? 100.0 * $softStopUp / (2.0 * $blindUp - $softStopUp)
+        : 0.0;
+    $softStopDownPercent = ($blindDown > 0 && $softStopDown > 0 && $softStopDown < $blindDown)
+        ? 100.0 * $softStopDown / (2.0 * $blindDown - $softStopDown)
+        : 0.0;
+    JD_Add($info, 'Gesamtzeit 100→0 AUF inkl. Wendezeit: ' . $totalUp . ' ms; abgeleitete Behanglaufzeit AUF: ' . $blindUp . ' ms; Sanft-Stopp AUF: ' . $softStopUp . ' ms = Fahrweg 0–' . number_format($softStopUpPercent, 2, ',', '.') . ' %.');
+    JD_Add($info, 'Gesamtzeit 0→100 ZU: ' . $totalDown . ' ms; abgeleitete Behanglaufzeit ZU: ' . $blindDown . ' ms; Sanft-Stopp ZU: ' . $softStopDown . ' ms = Fahrweg ' . number_format(100.0 - $softStopDownPercent, 2, ',', '.') . '–100 %.');
     if (max($totalUp, $totalDown) + $reserve !== $max) {
         JD_Add($warnings, 'MaxFahrt entspricht nicht der laengeren Richtungs-Gesamtzeit + Referenzreserve.');
     }

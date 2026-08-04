@@ -589,6 +589,114 @@ function J_DirectionalBlindTravelMs(int $rootID, int $direction): float
     return $blindTravelMs;
 }
 
+function J_DirectionalSoftStopMs(int $rootID, int $direction): float
+{
+    $ident = $direction === J_DIR_UP ? 'Sanftstopp_AUF_ms' : 'Sanftstopp_ZU_ms';
+    $softStopMs = (float) J_ConfigInt($rootID, $ident);
+    $blindTravelMs = J_DirectionalBlindTravelMs($rootID, $direction);
+
+    if ($softStopMs < 0.0 || $softStopMs >= $blindTravelMs) {
+        throw new RuntimeException('Richtungsabhängiger Sanft-Stopp ist ungueltig.');
+    }
+
+    return $softStopMs;
+}
+
+
+/**
+ * Prozentualer Fahrweg innerhalb der physischen Sanft-Stopp-Endzone.
+ * T = vollständige Behanglaufzeit, S = Sanft-Stopp-Zeit.
+ * Bei linearer Verzögerung ist der Sanft-Stopp-Weg die Dreiecksfläche S/2;
+ * bezogen auf den Gesamtweg T-S/2 ergibt sich S/(2*T-S).
+ */
+function J_DirectionalSoftStopRangePercent(int $rootID, int $direction): float
+{
+    $blindTravelMs = J_DirectionalBlindTravelMs($rootID, $direction);
+    $softStopMs = J_DirectionalSoftStopMs($rootID, $direction);
+    if ($softStopMs <= 0.0) {
+        return 0.0;
+    }
+
+    return 100.0 * $softStopMs / (2.0 * $blindTravelMs - $softStopMs);
+}
+
+/**
+ * Liefert die Zeitkoordinate des Behangs innerhalb einer vollständigen Fahrt
+ * in der angegebenen Richtung. 0 ms entspricht der gegenüberliegenden
+ * Endlage, die volle Behanglaufzeit der angefahrenen Endlage.
+ */
+function J_BlindTimeCoordinateMs(int $rootID, float $position, int $direction): float
+{
+    $blindTravelMs = J_DirectionalBlindTravelMs($rootID, $direction);
+    $softStopMs = J_DirectionalSoftStopMs($rootID, $direction);
+    $position = J_Clamp($position);
+    $progress = $direction === J_DIR_UP
+        ? (100.0 - $position) / 100.0
+        : $position / 100.0;
+
+    if ($softStopMs <= 0.0) {
+        return $progress * $blindTravelMs;
+    }
+
+    // Die Gesamtstrecke entspricht bei linearer Verzögerung während S:
+    // volle Geschwindigkeit für T-S plus Dreiecksfläche S/2.
+    $effectiveTravelMs = $blindTravelMs - $softStopMs / 2.0;
+    $distanceAtFullSpeed = $progress * $effectiveTravelMs;
+    $softStopStartMs = $blindTravelMs - $softStopMs;
+    $softStopRange = J_DirectionalSoftStopRangePercent($rootID, $direction) / 100.0;
+    $softStopStartProgress = 1.0 - $softStopRange;
+
+    // Außerhalb der positionsabhängigen Endzone bleibt die Geschwindigkeit
+    // konstant. Innerhalb der Zone wird nur der bis zum Ziel durchfahrene
+    // Anteil der linearen Verzögerung berücksichtigt.
+    if ($progress <= $softStopStartProgress) {
+        return $distanceAtFullSpeed;
+    }
+
+    $softDistance = min(
+        $softStopMs / 2.0,
+        max(0.0, $distanceAtFullSpeed - $softStopStartMs)
+    );
+    $discriminant = max(0.0, $softStopMs * $softStopMs - 2.0 * $softStopMs * $softDistance);
+    $softElapsedMs = $softStopMs - sqrt($discriminant);
+
+    return $softStopStartMs + $softElapsedMs;
+}
+
+/**
+ * Inverse Funktion zu J_BlindTimeCoordinateMs(): berechnet aus einer
+ * Zeitkoordinate die Behangposition einschließlich linearer Verzögerung nur
+ * unmittelbar vor der angefahrenen Endlage.
+ */
+function J_BlindPositionAtTimeCoordinate(int $rootID, float $timeCoordinateMs, int $direction): float
+{
+    $blindTravelMs = J_DirectionalBlindTravelMs($rootID, $direction);
+    $softStopMs = J_DirectionalSoftStopMs($rootID, $direction);
+    $timeCoordinateMs = max(0.0, min($blindTravelMs, $timeCoordinateMs));
+
+    if ($softStopMs <= 0.0) {
+        $progress = $timeCoordinateMs / $blindTravelMs;
+    } else {
+        $effectiveTravelMs = $blindTravelMs - $softStopMs / 2.0;
+        $softStopStartMs = $blindTravelMs - $softStopMs;
+
+        if ($timeCoordinateMs <= $softStopStartMs) {
+            $distanceAtFullSpeed = $timeCoordinateMs;
+        } else {
+            $softElapsedMs = $timeCoordinateMs - $softStopStartMs;
+            $distanceAtFullSpeed = $softStopStartMs
+                + $softElapsedMs
+                - ($softElapsedMs * $softElapsedMs) / (2.0 * $softStopMs);
+        }
+        $progress = $distanceAtFullSpeed / $effectiveTravelMs;
+    }
+
+    $progress = max(0.0, min(1.0, $progress));
+    return $direction === J_DIR_UP
+        ? 100.0 * (1.0 - $progress)
+        : 100.0 * $progress;
+}
+
 function J_ReferenceDurationMs(int $rootID, int $direction): int
 {
     $totalMs = $direction === J_DIR_UP
@@ -600,8 +708,15 @@ function J_ReferenceDurationMs(int $rootID, int $direction): int
 
 function J_BlindDurationMs(int $rootID, float $startBlind, float $targetBlind, float $startSlat, int $direction, bool $withReserve): int
 {
-    $blindTravelMs = J_DirectionalBlindTravelMs($rootID, $direction);
-    $blindMs = abs($targetBlind - $startBlind) / 100.0 * $blindTravelMs;
+    // Prozentpositionen sind Fahrweg. Daher werden Start und Ziel immer über
+    // dieselbe absolute Endlagenkennlinie in Zeitkoordinaten umgerechnet.
+    // Liegt das Ziel außerhalb der Endzone, ist der Abschnitt rein linear.
+    // Liegt es innerhalb, enthält die Dauer genau den bis dorthin gefahrenen
+    // Anteil der Sanft-Stopp-Phase – ohne zusätzliche Abbremsung am Ziel.
+    $startCoordinateMs = J_BlindTimeCoordinateMs($rootID, $startBlind, $direction);
+    $targetCoordinateMs = J_BlindTimeCoordinateMs($rootID, $targetBlind, $direction);
+    $blindMs = max(0.0, $targetCoordinateMs - $startCoordinateMs);
+
     $duration = J_BlindStartDelayMs($rootID, $startBlind, $startSlat, $direction) + $blindMs;
     if ($withReserve) {
         $duration += J_ConfigInt($rootID, 'Referenzreserve_ms');
@@ -644,8 +759,17 @@ function J_UpdatePositionToNow(int $rootID, ?float $nowMs = null): void
 
     $blindStartDelay = J_BlindStartDelayMs($rootID, $startBlind, $startSlat, $state);
     $blindElapsed = max(0.0, $elapsed - $blindStartDelay);
-    $blindDelta = 100.0 * $blindElapsed / $blindTravelMs;
-    $blind = $state === J_DIR_UP ? $startBlind - $blindDelta : $startBlind + $blindDelta;
+
+    // Die physische Geschwindigkeit hängt von der absoluten Position zur
+    // angefahrenen Endlage ab, nicht davon, ob das Sollziel 0/100 % oder eine
+    // Zwischenposition ist. Ein Zwischenziel in der Endzone nutzt daher den
+    // bis zu dieser Position tatsächlich durchfahrenen Sanft-Stopp-Anteil.
+    $blindStartCoordinateMs = J_BlindTimeCoordinateMs($rootID, $startBlind, $state);
+    $blind = J_BlindPositionAtTimeCoordinate(
+        $rootID,
+        $blindStartCoordinateMs + $blindElapsed,
+        $state
+    );
 
     SetValueFloat(J_ID($rootID, '04_Istwerte', 'Ist_Lamelle'), J_Clamp($slat));
     SetValueFloat(J_ID($rootID, '04_Istwerte', 'Ist_Behang'), J_Clamp($blind));

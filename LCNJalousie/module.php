@@ -11,7 +11,7 @@ declare(strict_types=1);
  */
 class LCNJalousie extends IPSModuleStrict
 {
-    private const VERSION = '0.1.15';
+    private const VERSION = '0.1.18';
     private const EXECUTE_PARENT_ACTION = '{7938A5A2-0981-5FE0-BE6C-8AA610D654EB}';
 
     private const STATUS_ACTIVE = 102;
@@ -53,6 +53,8 @@ class LCNJalousie extends IPSModuleStrict
         $this->RegisterPropertyInteger('TotalTravelMs', 182000);
         $this->RegisterPropertyInteger('TurnMs', 6500);
         $this->RegisterPropertyInteger('SoftStartMs', 6000);
+        $this->RegisterPropertyInteger('SoftStopUpMs', 4500);
+        $this->RegisterPropertyInteger('SoftStopDownMs', 4500);
         $this->RegisterPropertyInteger('BlindTravelMs', 175500);
         $this->RegisterPropertyInteger('ReferenceReserveMs', 5000);
         $this->RegisterPropertyInteger('MaxTravelMs', 187000);
@@ -179,6 +181,24 @@ class LCNJalousie extends IPSModuleStrict
                 ? 'Die gespeicherte Konfiguration ist vollständig. Vor dem Motorbetrieb die LCN-PRO-Verriegelung und die TS-Belegung am Bus prüfen.'
                 : "Noch zu erledigen:\n• " . implode("\n• ", $messages));
 
+        $softStopRangePercent = static function (int $travelMs, int $softStopMs): float {
+            if ($travelMs <= 0 || $softStopMs <= 0 || $softStopMs >= $travelMs) {
+                return 0.0;
+            }
+            // Bei linearer Verzögerung ist der Weg in der Sanft-Stopp-Phase
+            // eine Dreiecksfläche. Anteil = S / (2*T - S).
+            return 100.0 * $softStopMs / (2.0 * $travelMs - $softStopMs);
+        };
+        $blindTravelUpMs = max(0, $this->ReadPropertyInteger('TotalTravelMs') - $this->ReadPropertyInteger('TurnMs'));
+        $blindTravelDownMs = max(0, $this->ReadPropertyInteger('BlindTravelMs'));
+        $softStopUpPercent = $softStopRangePercent($blindTravelUpMs, $this->ReadPropertyInteger('SoftStopUpMs'));
+        $softStopDownPercent = $softStopRangePercent($blindTravelDownMs, $this->ReadPropertyInteger('SoftStopDownMs'));
+        $softStopRangeCaption = sprintf(
+            'Berechneter Sanft-Stopp-Fahrweg: AUF 0–%s %% und ZU %s–100 %% (aus Gesamt-/Behanglaufzeit und Sanft-Stopp-Zeit). Zwischenziele innerhalb dieser Endzonen werden mit dem bereits verlangsamten Fahrprofil berechnet; es gibt keine zusätzliche Ziel-Abbremsung.',
+            number_format($softStopUpPercent, 2, ',', '.'),
+            number_format(100.0 - $softStopDownPercent, 2, ',', '.')
+        );
+
         $form = [
             'elements' => [
                 [
@@ -225,6 +245,8 @@ class LCNJalousie extends IPSModuleStrict
                         ['type' => 'NumberSpinner', 'name' => 'BlindTravelMs', 'caption' => 'Gesamtlaufzeit 0 % AUF → 100 % ZU', 'suffix' => ' ms', 'minimum' => 1000],
                         ['type' => 'NumberSpinner', 'name' => 'TurnMs', 'caption' => 'Volle Wendezeit / Richtungswechsel', 'suffix' => ' ms', 'minimum' => 100],
                         ['type' => 'NumberSpinner', 'name' => 'SoftStartMs', 'caption' => 'Sanftanlauf aus Zwischenposition bei gleicher Richtung', 'suffix' => ' ms', 'minimum' => 0],
+                        ['type' => 'NumberSpinner', 'name' => 'SoftStopUpMs', 'caption' => 'Sanft-Stopp vor Endlage AUF (0 %)', 'suffix' => ' ms', 'minimum' => 0],
+                        ['type' => 'NumberSpinner', 'name' => 'SoftStopDownMs', 'caption' => 'Sanft-Stopp vor Endlage ZU (100 %)', 'suffix' => ' ms', 'minimum' => 0],
                         ['type' => 'NumberSpinner', 'name' => 'ReferenceReserveMs', 'caption' => 'Referenzreserve', 'suffix' => ' ms', 'minimum' => 0],
                         ['type' => 'NumberSpinner', 'name' => 'MaxTravelMs', 'caption' => 'Maximale überwachte Fahrt', 'suffix' => ' ms', 'minimum' => 1000],
                         ['type' => 'NumberSpinner', 'name' => 'ShakeFreeMs', 'caption' => 'ShakeFree nach Endlage ZU – Gegenfahrt', 'suffix' => ' ms', 'minimum' => 100],
@@ -233,6 +255,8 @@ class LCNJalousie extends IPSModuleStrict
                         ['type' => 'NumberSpinner', 'name' => 'PositionTolerance', 'caption' => 'Positionstoleranz', 'suffix' => ' %', 'digits' => 1, 'minimum' => 0.1, 'maximum' => 10],
                         ['type' => 'NumberSpinner', 'name' => 'SlatTolerance', 'caption' => 'Lamellentoleranz', 'suffix' => ' %', 'digits' => 1, 'minimum' => 0.1, 'maximum' => 10],
                         ['type' => 'Label', 'caption' => 'Richtungsabhängige Positionsrechnung: Für AUF wird aus der Gesamtzeit 100→0 die volle Wendezeit abgezogen; für ZU wird die Gesamtzeit 0→100 direkt als Behanglaufzeit verwendet.'],
+                        ['type' => 'Label', 'caption' => $softStopRangeCaption],
+                        ['type' => 'Label', 'caption' => 'Sanft-Stopp ist positionsabhängig: Er beginnt an der aus den Laufzeiten berechneten Prozentgrenze. Ein Zwischenziel außerhalb der Endzone fährt vollständig mit voller Geschwindigkeit; ein Zwischenziel innerhalb der Endzone enthält genau den bis zu dieser Position durchfahrenen Anteil der linearen Verzögerung. 0 ms deaktiviert die jeweilige Korrektur.'],
                         ['type' => 'Label', 'caption' => 'Bewegungsmodell: 0 % → ZU ohne Vorlauf; 100 % → AUF mit voller Wendezeit; Zwischenposition gleiche Richtung mit Sanftanlauf; Gegenrichtung mit dem längeren Wert aus Sanftanlauf und Rest-Wendezeit.'],
                         ['type' => 'Label', 'caption' => 'Die Zeitverzögerung / das Kalibrierfenster läuft nach jeder vollständig von Symcon ausgeführten Fahrt auf 100 % ZU – unabhängig davon, ob ShakeFree aktiviert ist. Währenddessen sendet Symcon keinen STOP und keinen Gegenbefehl. ShakeFree nach Endlage ZU startet – sofern aktiviert – erst nach Ablauf dieser Verzögerung.'],
                         ['type' => 'Label', 'caption' => 'Referenzierung: 0 % AUF und 100 % ZU werden jeweils erst nach der richtungsabhängigen Gesamtzeit plus Referenzreserve als gültige Endlage gespeichert. Die Referenz wird zusätzlich persistent als Modulattribut gesichert und bleibt bei normalem Übernehmen/Rebuild erhalten.'],
@@ -614,6 +638,8 @@ class LCNJalousie extends IPSModuleStrict
                 'ReferenceReason' => $this->ReadAttributeString('ReferenceReason'),
                 'TotalTravelUpMs_100_to_0' => $this->ReadPropertyInteger('TotalTravelMs'),
                 'TotalTravelDownMs_0_to_100' => $this->ReadPropertyInteger('BlindTravelMs'),
+                'SoftStopUpMs' => $this->ReadPropertyInteger('SoftStopUpMs'),
+                'SoftStopDownMs' => $this->ReadPropertyInteger('SoftStopDownMs'),
                 'CalibrationDelayMs' => $this->ReadPropertyInteger('CalibrationWindowMs'),
                 'LCNSendModuleID' => $this->ReadPropertyInteger('LCNSendModuleID'),
                 'LCNActorModuleID' => $this->ReadPropertyInteger('LCNActorModuleID'),
@@ -910,6 +936,8 @@ class LCNJalousie extends IPSModuleStrict
         $totalDown = $this->ReadPropertyInteger('BlindTravelMs');
         $turn = $this->ReadPropertyInteger('TurnMs');
         $softStart = $this->ReadPropertyInteger('SoftStartMs');
+        $softStopUp = $this->ReadPropertyInteger('SoftStopUpMs');
+        $softStopDown = $this->ReadPropertyInteger('SoftStopDownMs');
         $reserve = $this->ReadPropertyInteger('ReferenceReserveMs');
         $max = $this->ReadPropertyInteger('MaxTravelMs');
         $window = $this->ReadPropertyInteger('WorkerWindowMs');
@@ -917,8 +945,8 @@ class LCNJalousie extends IPSModuleStrict
         $calibrationWindow = $this->ReadPropertyInteger('CalibrationWindowMs');
         $blindUp = $totalUp - $turn;
         $blindDown = $totalDown;
-        if ($totalUp <= $turn || $totalDown <= 0 || $turn <= 0 || $softStart < 0 || $softStart > $turn || $blindUp <= 0 || $blindDown <= 0 || $max < max($totalUp, $totalDown) + $reserve || $window < 1000 || $window > 3000 || $shakePause < 0 || $shakePause > 3000 || $calibrationWindow < 30000 || $calibrationWindow > 120000) {
-            $messages[] = 'Zeitparameter sind widersprüchlich: Gesamtzeit 100→0 muss größer als die Wendezeit sein; Gesamtzeit 0→100 muss positiv sein; 0 ≤ Sanftanlauf ≤ Wendezeit; MaxFahrt mindestens längere Richtungs-Gesamtzeit + Reserve; Workerfenster 1000…3000 ms; ShakeFree-Umschaltpause 0…3000 ms; Zeitverzögerung/Kalibrierfenster 30000…120000 ms.';
+        if ($totalUp <= $turn || $totalDown <= 0 || $turn <= 0 || $softStart < 0 || $softStart > $turn || $blindUp <= 0 || $blindDown <= 0 || $softStopUp < 0 || $softStopUp >= $blindUp || $softStopDown < 0 || $softStopDown >= $blindDown || $max < max($totalUp, $totalDown) + $reserve || $window < 1000 || $window > 3000 || $shakePause < 0 || $shakePause > 3000 || $calibrationWindow < 30000 || $calibrationWindow > 120000) {
+            $messages[] = 'Zeitparameter sind widersprüchlich: Gesamtzeit 100→0 muss größer als die Wendezeit sein; Gesamtzeit 0→100 muss positiv sein; 0 ≤ Sanftanlauf ≤ Wendezeit; Sanft-Stopp AUF/ZU jeweils 0 bis kleiner als die zugehörige Behanglaufzeit; MaxFahrt mindestens längere Richtungs-Gesamtzeit + Reserve; Workerfenster 1000…3000 ms; ShakeFree-Umschaltpause 0…3000 ms; Zeitverzögerung/Kalibrierfenster 30000…120000 ms.';
             if ($status === self::STATUS_ACTIVE) {
                 $status = self::STATUS_TIMING_INVALID;
             }
@@ -1127,10 +1155,11 @@ class LCNJalousie extends IPSModuleStrict
     {
         // Version 0.1.14 führt getrennte Richtungs-Gesamtzeiten ein. Ein zuvor
         // in einer Zwischenposition berechneter Wert kann noch auf dem alten,
-        // symmetrischen Zeitmodell beruhen. Deshalb ist nach dem Update einmal
-        // eine neue Endlagenreferenz erforderlich. Frische Instanzen und
-        // spätere reine Updates ab 0.1.14 behalten ihre Referenz.
-        if ($previousVersion === '' || version_compare($previousVersion, '0.1.14', '>=')) {
+        // symmetrischen Zeitmodell beruhen. Version 0.1.18 führt zusätzlich
+        // die positionsabhängige Sanft-Stopp-Endzone ein. Deshalb ist nach dem
+        // Update einmal eine neue Endlagenreferenz erforderlich. Frische
+        // Instanzen und spätere reine Updates ab 0.1.18 behalten ihre Referenz.
+        if ($previousVersion === '' || version_compare($previousVersion, '0.1.18', '>=')) {
             return;
         }
 
@@ -1347,6 +1376,8 @@ class LCNJalousie extends IPSModuleStrict
             ['Gesamtlaufzeit_ms', 'Gesamtlaufzeit 100→0 AUF inkl. Wendezeit [ms]', 1, '', 110, 0, true],
             ['Wendezeit_ms', 'Volle Wendezeit [ms]', 1, '', 120, 0, true],
             ['Sanftanlauf_ms', 'Sanftanlauf Zwischenposition [ms]', 1, '', 125, 0, true],
+            ['Sanftstopp_AUF_ms', 'Sanft-Stopp vor Endlage AUF [ms]', 1, '', 127, 4500, true],
+            ['Sanftstopp_ZU_ms', 'Sanft-Stopp vor Endlage ZU [ms]', 1, '', 128, 4500, true],
             ['Behanglaufzeit_ms', 'Gesamtlaufzeit 0→100 ZU [ms]', 1, '', 130, 0, true],
             ['Referenzreserve_ms', 'Referenzreserve [ms]', 1, '', 140, 0, true],
             ['MaxFahrt_ms', 'Maximale Fahrt [ms]', 1, '', 150, 0, true],
@@ -1453,6 +1484,8 @@ class LCNJalousie extends IPSModuleStrict
             'Gesamtlaufzeit_ms' => ['TotalTravelMs', 1],
             'Wendezeit_ms' => ['TurnMs', 1],
             'Sanftanlauf_ms' => ['SoftStartMs', 1],
+            'Sanftstopp_AUF_ms' => ['SoftStopUpMs', 1],
+            'Sanftstopp_ZU_ms' => ['SoftStopDownMs', 1],
             'Behanglaufzeit_ms' => ['BlindTravelMs', 1],
             'Referenzreserve_ms' => ['ReferenceReserveMs', 1],
             'MaxFahrt_ms' => ['MaxTravelMs', 1],

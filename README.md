@@ -57,7 +57,7 @@ Eine ausführliche Anleitung steht in [ERSTE_SCHRITTE.md](ERSTE_SCHRITTE.md).
 
 ## Entwicklungsstand
 
-**0.1.15 – öffentliche Beta.** Der Runtime-Kern basiert auf der tiefengeprüften V11.3-Skriptfassung. Das Modul automatisiert deren Aufbau und Konfiguration. Vor einem produktiven Motorbetrieb bleiben reale Tests mit Symcon 9.0, PCHK/PCK, LCN-Bus, Relais, Motor und Endlagen zwingend.
+**0.1.18 – öffentliche Beta.** Der Runtime-Kern basiert auf der tiefengeprüften V11.3-Skriptfassung. Das Modul automatisiert deren Aufbau und Konfiguration. Vor einem produktiven Motorbetrieb bleiben reale Tests mit Symcon 9.0, PCHK/PCK, LCN-Bus, Relais, Motor und Endlagen zwingend.
 
 ## Lizenz
 
@@ -68,7 +68,7 @@ Ab Version 0.1.11 nutzt die Geräteinstanz das offizielle Symcon HTML-SDK für e
 
 Die direkten Statusvariablen `Position`, `Drehgrad` und `Position gültig` bleiben erhalten, damit die Werte auch in der Listenansicht und für Automationen verfügbar sind. `Position` verwendet 0 % = vollständig offen und 100 % = vollständig geschlossen; `Drehgrad` verwendet 0 % in AUF-Richtung und 100 % in AB-Richtung.
 
-Ab Version 0.1.15 wird eine gültige Endlagenreferenz doppelt persistent gespeichert: als sichtbare Statusvariable und zusätzlich als Modulattribut. Ein normales **Übernehmen**, ein Objektbaum-Rebuild oder eine erneute Statusabfrage löscht sie deshalb nicht mehr. Die Diagnosevariablen `Letzte Referenz-Endlage` und `Letzte Referenzierung` zeigen, wann 0 % AUF beziehungsweise 100 % ZU zuletzt sicher gesetzt wurden. Eine Referenz wird weiterhin bewusst verworfen, wenn das Bewegungsmodell geändert wird, die Symcon-Steuerung deaktiviert wird oder eine Fehlerverriegelung eintritt.
+Ab Version 0.1.15 wird eine gültige Endlagenreferenz doppelt persistent gespeichert: als sichtbare Statusvariable und zusätzlich als Modulattribut. Ein normales **Übernehmen**, ein Objektbaum-Rebuild oder eine erneute Statusabfrage löscht sie deshalb nicht mehr. Die Diagnosevariablen `Letzte Referenz-Endlage` und `Letzte Referenzierung` zeigen, wann 0 % AUF beziehungsweise 100 % ZU zuletzt sicher gesetzt wurden. Eine Referenz wird weiterhin bewusst verworfen, wenn ein Update ausdrücklich ein inkompatibles Bewegungsmodell einführt, die Symcon-Steuerung deaktiviert wird oder eine Fehlerverriegelung eintritt.
 
 Ist `Position gültig` noch `false`, wird der erste Endlagenauftrag auf 0 % oder 100 % automatisch als vollständige Referenzfahrt ausgeführt. Die Dauer ist jetzt richtungsspezifisch: Gesamtzeit 100→0 beziehungsweise 0→100 plus Referenzreserve, begrenzt durch `MaxFahrt`. Nach Ablauf der Reserve wird die entsprechende Endlage als Referenz gespeichert. Bei 100 % ZU läuft danach zusätzlich das konfigurierte Kalibrierfenster; bei 0 % AUF wird sofort der richtungsabhängige STOP ausgelöst. Lokale/externe Fahrten werden verfolgt, setzen aber ohne eindeutig überwachten Symcon-Endlagenauftrag keine neue Referenz.
 
@@ -94,6 +94,8 @@ Die beiden vollständigen Fahrtrichtungen werden getrennt konfiguriert:
 - **Gesamtlaufzeit 100 % ZU → 0 % AUF**: vollständige Öffnungsfahrt einschließlich der vollen Lamellenwendung.
 
 Für Zwischenpositionen leitet das Modul daraus zwei unterschiedliche Behanggeschwindigkeiten ab. In Richtung AUF wird die volle Wendezeit von der konfigurierten Gesamtzeit 100→0 abgezogen; in Richtung ZU wird die konfigurierte Gesamtzeit 0→100 direkt als reine Behanglaufzeit verwendet. Sanftanlauf und Rest-Wendezeit werden anschließend abhängig vom tatsächlichen Startzustand zusätzlich berücksichtigt.
+
+Ab Version 0.1.16 kann die Sanft-Stopp-Phase vor 0 % AUF und vor 100 % ZU getrennt eingestellt werden; der Standardwert beträgt jeweils 4.500 ms. Version 0.1.18 berechnet daraus einen positionsabhängigen Fahrwegabschnitt. Bei Behanglaufzeit `T` und Sanft-Stopp-Zeit `S` beträgt der Endzonenanteil `S / (2*T - S)`. Außerhalb dieser Endzone fährt der Behang rechnerisch mit voller Geschwindigkeit. Innerhalb der Endzone wird die bereits verringerte Geschwindigkeit berücksichtigt: Ein Ziel direkt am Zonenbeginn enthält noch keinen Sanft-Stopp-Anteil, Ziele näher an der Endlage zunehmend mehr und 0 % beziehungsweise 100 % die vollständige Sanft-Stopp-Zeit. Dabei entsteht keine zusätzliche Abbremsung vor einem Zwischenziel; das Modell bildet ausschließlich das physische, positionsabhängige Fahrprofil ab.
 
 Bei einem Laufzeit- oder Aufbaufehler verriegelt sich die Instanz. Alle Modulereignisse und Timer werden deaktiviert und es werden keine weiteren LCN-Befehle gesendet. Die lokale LCN-Steuerung bleibt frei. Eine Quittierung ist erst möglich, wenn beide realen Relais AUS melden; die Quittierung selbst sendet keinen Motorbefehl und macht die Positionsreferenz vorsorglich ungültig.
 

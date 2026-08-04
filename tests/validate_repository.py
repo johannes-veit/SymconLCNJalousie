@@ -353,7 +353,7 @@ def check_measured_blind_start_model() -> None:
         "'Sanftanlauf_ms' => ['SoftStartMs', 1]",
         "['Sanftanlauf_ms', 'Sanftanlauf Zwischenposition [ms]'",
         'invalidateReferenceAfterModelUpdate',
-        "version_compare($previousVersion, '0.1.14', '>=')",
+        "version_compare($previousVersion, '0.1.18', '>=')",
         'persistReferenceInvalid',
         "Gesamtlaufzeit 100 % ZU → 0 % AUF",
         "Gesamtlaufzeit 0 % AUF → 100 % ZU",
@@ -438,6 +438,219 @@ def check_timing_examples() -> None:
     if min(total_down_ms + reserve_ms, max_ms) != 180500.0:
         ERRORS.append('reference timing: ZU reference must use total-down plus reserve')
 
+
+
+def check_soft_stop_model() -> None:
+    module_path = ROOT / 'LCNJalousie' / 'module.php'
+    controller_path = ROOT / 'LCNJalousie' / 'scripts' / 'Controller.php'
+    worker_path = ROOT / 'LCNJalousie' / 'scripts' / 'Worker.php'
+    diagnose_path = ROOT / 'LCNJalousie' / 'scripts' / 'Diagnose.php'
+    if not all(path.is_file() for path in [module_path, controller_path, worker_path, diagnose_path]):
+        return
+
+    module = module_path.read_text(encoding='utf-8')
+    controller = controller_path.read_text(encoding='utf-8')
+    worker = worker_path.read_text(encoding='utf-8')
+    diagnose = diagnose_path.read_text(encoding='utf-8')
+
+    required_module = [
+        "RegisterPropertyInteger('SoftStopUpMs', 4500)",
+        "RegisterPropertyInteger('SoftStopDownMs', 4500)",
+        "'Sanftstopp_AUF_ms' => ['SoftStopUpMs', 1]",
+        "'Sanftstopp_ZU_ms' => ['SoftStopDownMs', 1]",
+        "['Sanftstopp_AUF_ms', 'Sanft-Stopp vor Endlage AUF [ms]'",
+        "['Sanftstopp_ZU_ms', 'Sanft-Stopp vor Endlage ZU [ms]'",
+        'Berechneter Sanft-Stopp-Fahrweg',
+        'Sanft-Stopp ist positionsabhängig',
+        '100.0 * $softStopMs / (2.0 * $travelMs - $softStopMs)',
+    ]
+    for pattern in required_module:
+        if pattern not in module:
+            ERRORS.append(f'{module_path.relative_to(ROOT)}: distance-based soft-stop configuration missing ({pattern})')
+
+    required_controller = [
+        'function J_DirectionalSoftStopMs',
+        'function J_DirectionalSoftStopRangePercent',
+        'function J_BlindTimeCoordinateMs',
+        'function J_BlindPositionAtTimeCoordinate',
+        "'Sanftstopp_AUF_ms'",
+        "'Sanftstopp_ZU_ms'",
+        '100.0 * $softStopMs / (2.0 * $blindTravelMs - $softStopMs)',
+        '$effectiveTravelMs = $blindTravelMs - $softStopMs / 2.0;',
+        '$softStopStartProgress = 1.0 - $softStopRange;',
+        '$startCoordinateMs = J_BlindTimeCoordinateMs',
+        '$targetCoordinateMs = J_BlindTimeCoordinateMs',
+        '$blindStartCoordinateMs = J_BlindTimeCoordinateMs',
+        '$blind = J_BlindPositionAtTimeCoordinate',
+        'Zwischenziel in der Endzone nutzt daher den',
+    ]
+    for pattern in required_controller:
+        if pattern not in controller:
+            ERRORS.append(f'{controller_path.relative_to(ROOT)}: distance-based soft-stop model missing ({pattern})')
+
+    forbidden_controller = [
+        'Nur ein echter Auftrag auf 0 % oder 100 % durchläuft',
+        'Zwischenpositionen werden mit voller Geschwindigkeit angefahren',
+        '$blindMs = abs($targetBlind - $startBlind) / 100.0 * $fullSpeedTravelMs;',
+        '$blindDelta = 100.0 * $blindElapsed / $fullSpeedTravelMs;',
+    ]
+    for pattern in forbidden_controller:
+        if pattern in controller:
+            ERRORS.append(f'{controller_path.relative_to(ROOT)}: obsolete endpoint-only soft-stop behavior remains ({pattern})')
+
+    required_worker = [
+        'function JW_DirectionalSoftStopMs',
+        'function JW_DirectionalSoftStopRangePercent',
+        'function JW_BlindTimeCoordinateMs',
+        'function JW_BlindPositionAtTimeCoordinate',
+        '100.0 * $softStopMs / (2.0 * $blindTravelMs - $softStopMs)',
+        '$softStopStartProgress = 1.0 - $softStopRange;',
+        '$blindStartCoordinateMs = JW_BlindTimeCoordinateMs',
+        '$blind = JW_BlindPositionAtTimeCoordinate',
+        'Positionsabhängige Kennlinie für jede Fahrt',
+    ]
+    for pattern in required_worker:
+        if pattern not in worker:
+            ERRORS.append(f'{worker_path.relative_to(ROOT)}: worker distance-based soft-stop model missing ({pattern})')
+
+    forbidden_worker = [
+        'Die Endlagenkennlinie gilt ausschließlich für echte 0-/100-%-Aufträge.',
+        'Zwischenpositionen werden ohne Sanft-Stopp am Ziel',
+        '$blindDelta = 100.0 * $blindElapsed / $fullSpeedTravelMs;',
+    ]
+    for pattern in forbidden_worker:
+        if pattern in worker:
+            ERRORS.append(f'{worker_path.relative_to(ROOT)}: worker endpoint-only soft-stop behavior remains ({pattern})')
+
+    for pattern in [
+        "'Sanftstopp_AUF_ms' => 1",
+        "'Sanftstopp_ZU_ms' => 1",
+        'Sanftstopp_AUF_ms und Sanftstopp_ZU_ms',
+        '100.0 * $softStopUp / (2.0 * $blindUp - $softStopUp)',
+        'Fahrweg 0–',
+        '–100 %',
+    ]:
+        if pattern not in diagnose:
+            ERRORS.append(f'{diagnose_path.relative_to(ROOT)}: diagnostics soft-stop range missing ({pattern})')
+
+    def range_percent(travel_ms: float, soft_ms: float) -> float:
+        if travel_ms <= 0.0 or soft_ms <= 0.0 or soft_ms >= travel_ms:
+            return 0.0
+        return 100.0 * soft_ms / (2.0 * travel_ms - soft_ms)
+
+    def time_coordinate(position: float, direction: int, travel_ms: float, soft_ms: float) -> float:
+        position = max(0.0, min(100.0, position))
+        progress = (100.0 - position) / 100.0 if direction == 1 else position / 100.0
+        if soft_ms <= 0.0:
+            return progress * travel_ms
+        effective = travel_ms - soft_ms / 2.0
+        distance = progress * effective
+        soft_start_time = travel_ms - soft_ms
+        soft_start_progress = 1.0 - range_percent(travel_ms, soft_ms) / 100.0
+        if progress <= soft_start_progress:
+            return distance
+        soft_distance = min(soft_ms / 2.0, max(0.0, distance - soft_start_time))
+        discriminant = max(0.0, soft_ms * soft_ms - 2.0 * soft_ms * soft_distance)
+        return soft_start_time + soft_ms - discriminant ** 0.5
+
+    def position_at_time(time_ms: float, direction: int, travel_ms: float, soft_ms: float) -> float:
+        time_ms = max(0.0, min(travel_ms, time_ms))
+        if soft_ms <= 0.0:
+            progress = time_ms / travel_ms
+        else:
+            effective = travel_ms - soft_ms / 2.0
+            soft_start_time = travel_ms - soft_ms
+            if time_ms <= soft_start_time:
+                distance = time_ms
+            else:
+                elapsed_soft = time_ms - soft_start_time
+                distance = soft_start_time + elapsed_soft - elapsed_soft * elapsed_soft / (2.0 * soft_ms)
+            progress = distance / effective
+        progress = max(0.0, min(1.0, progress))
+        return 100.0 * (1.0 - progress) if direction == 1 else 100.0 * progress
+
+    # Standardwerte: 4.500 ms bei 175.500 ms Behanglaufzeit ergeben rund
+    # 1,30 % Fahrweg je Endlage, nicht 4.500/175.500 Prozent.
+    standard_range = range_percent(175500.0, 4500.0)
+    if abs(standard_range - 1.2987012987012987) > 1e-12:
+        ERRORS.append(f'soft-stop standard range mismatch: {standard_range}')
+
+    # Vorwärts- und Rückwärtsfunktion müssen für beide Richtungen und mehrere
+    # Laufzeitkombinationen exakt zusammenpassen.
+    cases = [
+        (175500.0, 4500.0),
+        (120000.0, 0.0),
+        (90000.0, 9000.0),
+        (47250.0, 4500.0),  # exakt 5 % Fahrweg in der Sanft-Stopp-Zone
+    ]
+    for direction in (1, 2):
+        for travel_ms, soft_ms in cases:
+            for step in range(0, 1001):
+                position = step / 10.0
+                reconstructed = position_at_time(
+                    time_coordinate(position, direction, travel_ms, soft_ms),
+                    direction,
+                    travel_ms,
+                    soft_ms,
+                )
+                if abs(reconstructed - position) > 1e-8:
+                    ERRORS.append(
+                        f'soft-stop inverse mismatch direction={direction}, travel={travel_ms}, '
+                        f'soft={soft_ms}, position={position}: {reconstructed}'
+                    )
+                    break
+
+    # Beispiel aus der Anforderung: Bei exakt 5 % Sanft-Stopp-Fahrweg beginnt
+    # die Zone ZU bei 95 % und AUF bei 5 %. 95 % beziehungsweise 5 % enthalten
+    # noch keine Verzögerungszeit; danach wächst der genutzte Anteil bis zur
+    # vollen Sanft-Stopp-Zeit an der Endlage monoton.
+    travel_ms = 47250.0
+    soft_ms = 4500.0
+    if abs(range_percent(travel_ms, soft_ms) - 5.0) > 1e-12:
+        ERRORS.append('synthetic 5-percent soft-stop range is not exactly 5 %')
+
+    down_zone_start = 95.0
+    down_start_time = time_coordinate(down_zone_start, 2, travel_ms, soft_ms)
+    if abs(down_start_time - (travel_ms - soft_ms)) > 1e-9:
+        ERRORS.append(f'down soft-stop must begin at 95 %: {down_start_time}')
+    down_soft_elapsed = [
+        time_coordinate(target, 2, travel_ms, soft_ms) - down_start_time
+        for target in (96.0, 97.0, 98.0, 99.0, 100.0)
+    ]
+    if not (0.0 < down_soft_elapsed[0] < down_soft_elapsed[1] < down_soft_elapsed[2] < down_soft_elapsed[3] < down_soft_elapsed[4]):
+        ERRORS.append(f'down partial soft-stop times are not monotonic: {down_soft_elapsed}')
+    if abs(down_soft_elapsed[-1] - soft_ms) > 1e-9:
+        ERRORS.append(f'down endpoint must contain full soft-stop duration: {down_soft_elapsed[-1]}')
+
+    up_zone_start = 5.0
+    up_start_time = time_coordinate(up_zone_start, 1, travel_ms, soft_ms)
+    if abs(up_start_time - (travel_ms - soft_ms)) > 1e-9:
+        ERRORS.append(f'up soft-stop must begin at 5 %: {up_start_time}')
+    up_soft_elapsed = [
+        time_coordinate(target, 1, travel_ms, soft_ms) - up_start_time
+        for target in (4.0, 3.0, 2.0, 1.0, 0.0)
+    ]
+    if not (0.0 < up_soft_elapsed[0] < up_soft_elapsed[1] < up_soft_elapsed[2] < up_soft_elapsed[3] < up_soft_elapsed[4]):
+        ERRORS.append(f'up partial soft-stop times are not monotonic: {up_soft_elapsed}')
+    if abs(up_soft_elapsed[-1] - soft_ms) > 1e-9:
+        ERRORS.append(f'up endpoint must contain full soft-stop duration: {up_soft_elapsed[-1]}')
+
+    # Außerhalb der Endzone muss die Zeit-Weg-Zuordnung exakt linear bleiben.
+    effective_ms = travel_ms - soft_ms / 2.0
+    if abs(time_coordinate(95.0, 2, travel_ms, soft_ms) - 0.95 * effective_ms) > 1e-9:
+        ERRORS.append('down position 95 % must still be reached at full-speed linear timing')
+    if abs(time_coordinate(5.0, 1, travel_ms, soft_ms) - 0.95 * effective_ms) > 1e-9:
+        ERRORS.append('up position 5 % must still be reached at full-speed linear timing')
+
+    # 0 ms deaktiviert die Korrektur vollständig und entspricht Version 0.1.15.
+    for direction in (1, 2):
+        for position in (0.0, 12.5, 50.0, 87.5, 100.0):
+            expected_progress = (100.0 - position) / 100.0 if direction == 1 else position / 100.0
+            actual = time_coordinate(position, direction, 175500.0, 0.0)
+            if abs(actual - expected_progress * 175500.0) > 1e-9:
+                ERRORS.append(
+                    f'disabled soft-stop must retain linear 0.1.15 timing direction={direction}, position={position}'
+                )
 
 
 def check_calibration_window_and_fault_latch() -> None:
@@ -598,6 +811,7 @@ def main() -> int:
     check_javascript()
     check_measured_blind_start_model()
     check_timing_examples()
+    check_soft_stop_model()
     check_calibration_window_and_fault_latch()
     check_reference_persistence_and_relay_off()
     check_php()
