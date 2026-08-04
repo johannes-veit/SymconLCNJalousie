@@ -1,7 +1,7 @@
 <?php
 /**
  * Jalousiesteuerung LCN / IP-Symcon 9.0
- * V11.3 - Zentraler PHP-Controller
+ * V11.4 - Zentraler PHP-Controller
  *
  * Freigabestand fuer Symcon 9.0 / PHP 8.5.
  *
@@ -447,7 +447,7 @@ function J_SendStopForRealDirection(int $rootID): bool
     return true;
 }
 
-function J_TurnTimeMs(int $rootID, float $startSlat, int $direction): float
+function J_SlatTurnTimeMs(int $rootID, float $startSlat, int $direction): float
 {
     $turnMs = (float) J_ConfigInt($rootID, 'Wendezeit_ms');
     if ($turnMs <= 0.0) {
@@ -458,6 +458,30 @@ function J_TurnTimeMs(int $rootID, float $startSlat, int $direction): float
         : (100.0 - J_Clamp($startSlat)) / 100.0 * $turnMs;
 }
 
+function J_BlindStartDelayMs(int $rootID, float $startBlind, float $startSlat, int $direction): float
+{
+    $turnMs = (float) J_ConfigInt($rootID, 'Wendezeit_ms');
+    $softStartMs = (float) J_ConfigInt($rootID, 'Sanftanlauf_ms');
+    $positionTolerance = J_ConfigFloat($rootID, 'Positionstoleranz');
+    if ($turnMs <= 0.0 || $softStartMs < 0.0 || $softStartMs > $turnMs) {
+        throw new RuntimeException('Wendezeit_ms und Sanftanlauf_ms sind ungueltig.');
+    }
+
+    // Gemessene Mechanik:
+    // - aus der oberen Endlage in Richtung AB beginnt der Behang sofort,
+    // - aus der unteren Endlage in Richtung AUF beginnt er nach voller Wendezeit,
+    // - aus einer Zwischenposition gilt mindestens die Sanftanlaufzeit,
+    //   bei notwendiger Lamellenwendung jedoch die laengere Rest-Wendezeit.
+    if ($direction === J_DIR_DOWN && $startBlind <= $positionTolerance) {
+        return 0.0;
+    }
+    if ($direction === J_DIR_UP && $startBlind >= 100.0 - $positionTolerance) {
+        return $turnMs;
+    }
+
+    return max($softStartMs, J_SlatTurnTimeMs($rootID, $startSlat, $direction));
+}
+
 function J_BlindDurationMs(int $rootID, float $startBlind, float $targetBlind, float $startSlat, int $direction, bool $withReserve): int
 {
     $blindTravelMs = (float) J_ConfigInt($rootID, 'Behanglaufzeit_ms');
@@ -465,7 +489,7 @@ function J_BlindDurationMs(int $rootID, float $startBlind, float $targetBlind, f
         throw new RuntimeException('Behanglaufzeit_ms muss groesser 0 sein.');
     }
     $blindMs = abs($targetBlind - $startBlind) / 100.0 * $blindTravelMs;
-    $duration = J_TurnTimeMs($rootID, $startSlat, $direction) + $blindMs;
+    $duration = J_BlindStartDelayMs($rootID, $startBlind, $startSlat, $direction) + $blindMs;
     if ($withReserve) {
         $duration += J_ConfigInt($rootID, 'Referenzreserve_ms');
     }
@@ -499,13 +523,14 @@ function J_UpdatePositionToNow(int $rootID, ?float $nowMs = null): void
         throw new RuntimeException('Laufzeiten muessen groesser 0 sein.');
     }
 
-    $turnNeeded = J_TurnTimeMs($rootID, $startSlat, $state);
+    $turnNeeded = J_SlatTurnTimeMs($rootID, $startSlat, $state);
     $turnUsed = min($elapsed, $turnNeeded);
     $slat = $state === J_DIR_UP
         ? $startSlat - 100.0 * $turnUsed / $turnMs
         : $startSlat + 100.0 * $turnUsed / $turnMs;
 
-    $blindElapsed = max(0.0, $elapsed - $turnNeeded);
+    $blindStartDelay = J_BlindStartDelayMs($rootID, $startBlind, $startSlat, $state);
+    $blindElapsed = max(0.0, $elapsed - $blindStartDelay);
     $blindDelta = 100.0 * $blindElapsed / $blindTravelMs;
     $blind = $state === J_DIR_UP ? $startBlind - $blindDelta : $startBlind + $blindDelta;
 

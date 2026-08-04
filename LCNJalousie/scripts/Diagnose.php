@@ -1,7 +1,7 @@
 <?php
 /**
  * Jalousiesteuerung LCN / IP-Symcon 9.0
- * V11.3 - Diagnose, Kompatibilitaets- und Installationspruefung
+ * V11.4 - Diagnose, Kompatibilitaets- und Installationspruefung
  *
  * Die Diagnose prueft die formale Symcon-/LCN-Konfiguration. Sie ersetzt
  * keine reale Inbetriebnahme mit Motor, Relaisrueckmeldung und LCN-Busmonitor.
@@ -161,7 +161,7 @@ $variableSchema = [
         'GT8_LANG_AUF_ID' => 1, 'GT8_LANG_AB_ID' => 1,
         'TS_KURZ_AUF' => 3, 'TS_KURZ_AB' => 3,
         'Gesamtlaufzeit_ms' => 1, 'Wendezeit_ms' => 1,
-        'Behanglaufzeit_ms' => 1, 'Referenzreserve_ms' => 1,
+        'Sanftanlauf_ms' => 1, 'Behanglaufzeit_ms' => 1, 'Referenzreserve_ms' => 1,
         'MaxFahrt_ms' => 1, 'ShakeFree_ms' => 1,
         'Relaisbestaetigung_ms' => 1, 'Stoppbestaetigung_ms' => 1,
         'Spaetstart_Schutz_ms' => 1, 'Workerfenster_ms' => 1,
@@ -291,6 +291,7 @@ if ($errors === []) {
     }
 
     $turn = GetValueInteger((int) JD_ID($rootID, '01_Konfiguration', 'Wendezeit_ms'));
+    $softStart = GetValueInteger((int) JD_ID($rootID, '01_Konfiguration', 'Sanftanlauf_ms'));
     $blind = GetValueInteger((int) JD_ID($rootID, '01_Konfiguration', 'Behanglaufzeit_ms'));
     $total = GetValueInteger((int) JD_ID($rootID, '01_Konfiguration', 'Gesamtlaufzeit_ms'));
     $reserve = GetValueInteger((int) JD_ID($rootID, '01_Konfiguration', 'Referenzreserve_ms'));
@@ -304,11 +305,14 @@ if ($errors === []) {
     $coalesceMs = GetValueInteger((int) JD_ID($rootID, '01_Konfiguration', 'Relais_Koaleszenz_ms'));
     $healthSeconds = GetValueInteger((int) JD_ID($rootID, '01_Konfiguration', 'Healthcheck_s'));
 
-    if ($turn <= 0 || $blind <= 0 || $total <= 0 || $max <= 0) {
-        JD_Add($errors, 'Alle Laufzeiten muessen groesser 0 sein.');
+    if ($turn <= 0 || $softStart < 0 || $blind <= 0 || $total <= 0 || $max <= 0) {
+        JD_Add($errors, 'Wende-, Behang-, Gesamt- und Maximalfahrzeit muessen positiv sein; Sanftanlauf darf 0 sein.');
+    }
+    if ($softStart > $turn) {
+        JD_Add($errors, 'Sanftanlauf_ms darf die volle Wendezeit nicht ueberschreiten.');
     }
     if ($turn + $blind !== $total) {
-        JD_Add($errors, 'Gesamtlaufzeit muss Wendezeit + Behanglaufzeit entsprechen.');
+        JD_Add($errors, 'Gesamtlaufzeit AB-Endlage nach AUF-Endlage muss Wendezeit + Behanglaufzeit entsprechen.');
     }
     if ($total + $reserve !== $max) {
         JD_Add($warnings, 'MaxFahrt entspricht nicht Gesamtlaufzeit + Referenzreserve.');
@@ -342,8 +346,8 @@ if ($errors === []) {
     foreach (['Controller' => $controllerID, 'Worker' => $workerID, 'Healthcheck' => $healthID, 'Diagnose' => $diagnoseID] as $name => $id) {
         if ($id === false || !IPS_ScriptExists((int) $id)) {
             JD_Add($errors, $name . '-Skript fehlt oder hat falschen Objekttyp.');
-        } elseif (strpos(IPS_GetScriptContent((int) $id), 'V11.3') === false) {
-            JD_Add($warnings, $name . '-Skript enthaelt keine V11.3-Kennung. Skriptstand pruefen.');
+        } elseif (strpos(IPS_GetScriptContent((int) $id), 'V11.4') === false) {
+            JD_Add($warnings, $name . '-Skript enthaelt keine V11.4-Kennung. Skriptstand pruefen.');
         }
     }
 
@@ -426,7 +430,7 @@ if ($errors === []) {
             "case 'RELAY_UPDATE':" => 'koaleszierte Relaisauswertung',
         ] as $needle => $description) {
             if (strpos($controllerContent, $needle) === false) {
-                JD_Add($errors, 'Controller enthaelt nicht die erwartete V11.3-Sicherheitsfunktion: ' . $description . '.');
+                JD_Add($errors, 'Controller enthaelt nicht die erwartete V11.4-Sicherheitsfunktion: ' . $description . '.');
             }
         }
     }
@@ -453,7 +457,7 @@ if ($errors === []) {
 }
 
 $out = [];
-$out[] = 'DIAGNOSE JALOUSIE V11.3 - SYMCON 9.0 / PHP 8.5';
+$out[] = 'DIAGNOSE JALOUSIE V11.4 - SYMCON 9.0 / PHP 8.5';
 $out[] = 'Objekt: ' . IPS_GetLocation($rootID) . ' (ID ' . $rootID . ')';
 $out[] = str_repeat('=', 84);
 $out[] = '';

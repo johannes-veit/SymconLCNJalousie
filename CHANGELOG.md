@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.1.8 – 2026-08-04
+
+- Eigene interaktive Symcon-Kachel über das offizielle HTML-SDK ergänzt.
+- Behang: vertikaler Slider sowie Schnellwahltasten `AUF 0 %`, `MITTE 50 %`, `ZU 100 %`.
+- Lamellen: vertikaler Slider sowie Schnellwahltasten `AUF 0 %`, `MITTE 50 %`, `ZU 100 %`.
+- Großer STOP-Taster: Der vorhandene Controller ermittelt die reale aktive Relaisrichtung und sendet den zugehörigen LCN-KURZ-Befehl erneut.
+- ShakeFree direkt in der Kachel über einen kleinen Ein/Aus-Schalter bedienbar.
+- Laufstatusanzeige mit `fährt AUF`, `fährt ZU`, `GESTOPPT`, `Geöffnet 100%`, `Geschlossen 100%` und Fehlerstatus.
+- Referenzstatus, aktuelle Prozentwerte und eine animierte Behang-/Lamellendarstellung integriert.
+- Laufzeitaktualisierung erfolgt über `UpdateVisualizationValue()`; Bedienung ausschließlich über den abgesicherten HTML-SDK-Kanal `requestAction()`.
+- Symcon-Icons werden über `/icons.js` eingebunden.
+
+## 0.1.7 – 2026-08-04
+
+- Gemessenes Bewegungsmodell ergänzt: 0 % nach AB ohne Vorlauf, 100 % nach AUF mit 6,5 s Wendezeit, Zwischenposition gleiche Richtung mit 6,0 s Sanftanlauf, Gegenrichtung mit vollständiger Wendezeit.
+- Neue Konfiguration `Sanftanlauf_ms`; Positionsreferenz wird nach dem Modellupdate sicher verworfen.
+
 ## 0.1.6
 
 - Native Symcon-Rollladenkachel: direkte Statusvariablen `Position` und `Drehgrad` unter der Modulinstanz.

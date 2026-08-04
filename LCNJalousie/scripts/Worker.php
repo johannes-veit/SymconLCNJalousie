@@ -1,7 +1,7 @@
 <?php
 /**
  * Jalousiesteuerung LCN / IP-Symcon 9.0
- * V11.3 - 1-s-Worker mit kurzer Millisekunden-Schlussphase
+ * V11.4 - 1-s-Worker mit kurzer Millisekunden-Schlussphase
  *
  * Der ScriptTimer wird vom Controller auf 1 Sekunde gesetzt. Lange Fahrten
  * werden nicht mit IPS_Sleep abgewartet. Nur im letzten Workerfenster wird
@@ -152,6 +152,28 @@ function JW_Clamp(float $value): float
     return max(0.0, min(100.0, $value));
 }
 
+function JW_SlatTurnTimeMs(float $startSlat, int $state, float $turnMs): float
+{
+    return $state === 1
+        ? JW_Clamp($startSlat) / 100.0 * $turnMs
+        : (100.0 - JW_Clamp($startSlat)) / 100.0 * $turnMs;
+}
+
+function JW_BlindStartDelayMs(int $rootID, float $startBlind, float $startSlat, int $state, float $turnMs): float
+{
+    $softStartMs = (float) GetValueInteger(JW_ID($rootID, '01_Konfiguration', 'Sanftanlauf_ms'));
+    $positionTolerance = GetValueFloat(JW_ID($rootID, '01_Konfiguration', 'Positionstoleranz'));
+
+    if ($state === 2 && $startBlind <= $positionTolerance) {
+        return 0.0;
+    }
+    if ($state === 1 && $startBlind >= 100.0 - $positionTolerance) {
+        return $turnMs;
+    }
+
+    return max($softStartMs, JW_SlatTurnTimeMs($startSlat, $state, $turnMs));
+}
+
 function JW_UpdatePosition(int $rootID, int $state, float $now): void
 {
     $startMs = GetValueFloat(JW_ID($rootID, '05_Intern', 'Startzeit_ms'));
@@ -168,16 +190,15 @@ function JW_UpdatePosition(int $rootID, int $state, float $now): void
         return;
     }
 
-    $turnNeeded = $state === 1
-        ? JW_Clamp($startSlat) / 100.0 * $turnMs
-        : (100.0 - JW_Clamp($startSlat)) / 100.0 * $turnMs;
+    $turnNeeded = JW_SlatTurnTimeMs($startSlat, $state, $turnMs);
     $turnUsed = min($elapsed, $turnNeeded);
 
     $slat = $state === 1
         ? $startSlat - 100.0 * $turnUsed / $turnMs
         : $startSlat + 100.0 * $turnUsed / $turnMs;
 
-    $blindElapsed = max(0.0, $elapsed - $turnNeeded);
+    $blindStartDelay = JW_BlindStartDelayMs($rootID, $startBlind, $startSlat, $state, $turnMs);
+    $blindElapsed = max(0.0, $elapsed - $blindStartDelay);
     $blindDelta = 100.0 * $blindElapsed / $blindTravelMs;
     $blind = $state === 1 ? $startBlind - $blindDelta : $startBlind + $blindDelta;
 

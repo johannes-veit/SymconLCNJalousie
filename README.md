@@ -58,9 +58,13 @@ Eine ausführliche Anleitung steht in [ERSTE_SCHRITTE.md](ERSTE_SCHRITTE.md).
 ## Lizenz
 
 MIT – siehe [LICENSE](LICENSE).
-## Native Kachel-Visualisierung und Referenzierung
+## Eigene Symcon-Kachel und Referenzierung
 
-Ab Version 0.1.6 legt die Geräteinstanz direkt die Statusvariablen `Position`, `Drehgrad` und `Position gültig` an. Dadurch erkennt die Symcon-Kachel-Visualisierung die Instanz als Rollladen/Raffstore. `Position` verwendet 0 % = vollständig offen und 100 % = vollständig geschlossen; `Drehgrad` verwendet 0 % in AUF-Richtung und 100 % in AB-Richtung.
+Ab Version 0.1.8 nutzt die Geräteinstanz das offizielle Symcon HTML-SDK für eine eigene, interaktive Jalousiekachel. Sie enthält für Behang und Lamellen jeweils einen Slider und die Schnellwahltasten 0/50/100 %, einen großen STOP-Taster, einen ShakeFree-Schalter, den Referenzstatus und eine laufend aktualisierte Fahrstatusanzeige. Die Kachel verwendet die in Symcon bereitgestellten Icons über `/icons.js`; Benutzeraktionen gelangen ausschließlich über `requestAction()` zur Modulinstanz.
+
+Die direkten Statusvariablen `Position`, `Drehgrad` und `Position gültig` bleiben erhalten, damit die Werte auch in der Listenansicht und für Automationen verfügbar sind. `Position` verwendet 0 % = vollständig offen und 100 % = vollständig geschlossen; `Drehgrad` verwendet 0 % in AUF-Richtung und 100 % in AB-Richtung.
 
 Nach einem Neustart oder einer Neuinitialisierung ist die angezeigte Zahl zunächst nur der gespeicherte Rechenwert und `Position gültig` steht auf `false`. Ist `Position gültig` noch `false`, wird der erste Endlagenauftrag auf 0 % oder 100 % automatisch als volle Referenzfahrt ausgeführt: unabhängig vom gespeicherten Rechenwert läuft er mit der maximal überwachten Fahrzeit bis zur gewählten Endlage. Erst nach bestätigtem STOP setzt das Modul den Endwert und `Position gültig` auf `true`. Lokale/externe Fahrten werden verfolgt, setzen aber ohne eindeutig überwachten Symcon-Endlagenauftrag keine neue Referenz.
+
+Der STOP-Taster der Kachel ist kein separater LCN-STOP-Befehl. Der Controller wertet die realen Relaisrückmeldungen aus und sendet den KURZ-Befehl der tatsächlich aktiven Richtung erneut, sodass das aktive LCN-Relais ausgeschaltet wird.
 

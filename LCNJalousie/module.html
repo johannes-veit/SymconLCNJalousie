@@ -1,0 +1,818 @@
+<script src="/icons.js"></script>
+<style>
+    :root {
+        color-scheme: light dark;
+        --jal-accent: #00c9a7;
+        --jal-accent-dark: #009f86;
+        --jal-danger: #d52b2b;
+        --jal-warning: #e5a400;
+        --jal-muted: rgba(110, 120, 130, 0.72);
+        --jal-line: rgba(120, 130, 140, 0.28);
+        --jal-surface: rgba(255, 255, 255, 0.72);
+        --jal-surface-strong: rgba(255, 255, 255, 0.93);
+        --jal-text: #18212b;
+        --jal-shadow: 0 3px 12px rgba(20, 35, 50, 0.12);
+    }
+
+    @media (prefers-color-scheme: dark) {
+        :root {
+            --jal-surface: rgba(35, 42, 49, 0.70);
+            --jal-surface-strong: rgba(42, 50, 58, 0.94);
+            --jal-text: #f4f7f9;
+            --jal-line: rgba(220, 230, 240, 0.18);
+            --jal-muted: rgba(220, 230, 240, 0.62);
+            --jal-shadow: 0 3px 12px rgba(0, 0, 0, 0.28);
+        }
+    }
+
+    * {
+        box-sizing: border-box;
+    }
+
+    html,
+    body {
+        width: 100%;
+        height: 100%;
+        min-width: 0;
+        min-height: 0;
+        margin: 0;
+        overflow: hidden;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        color: var(--jal-text);
+        background: transparent;
+    }
+
+    button,
+    input {
+        font: inherit;
+    }
+
+    .jal-tile {
+        width: 100%;
+        height: 100%;
+        min-height: 320px;
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr) auto;
+        gap: clamp(8px, 1.3vh, 14px);
+        padding: clamp(10px, 1.8vw, 20px);
+        overflow: hidden;
+    }
+
+    .jal-header {
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+    }
+
+    .jal-title {
+        min-width: 0;
+        margin: 0;
+        font-size: clamp(18px, 2.4vw, 30px);
+        font-weight: 500;
+        line-height: 1.15;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .jal-reference {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        max-width: 48%;
+        padding: 5px 9px;
+        border-radius: 999px;
+        font-size: clamp(11px, 1.35vw, 14px);
+        line-height: 1;
+        white-space: nowrap;
+        color: var(--jal-muted);
+        background: var(--jal-surface);
+        border: 1px solid var(--jal-line);
+    }
+
+    .jal-reference.is-valid {
+        color: var(--jal-accent-dark);
+    }
+
+    .jal-main {
+        min-height: 0;
+        display: grid;
+        grid-template-columns: minmax(230px, 1fr) minmax(150px, 0.72fr) minmax(230px, 1fr);
+        gap: clamp(10px, 1.8vw, 24px);
+        align-items: stretch;
+    }
+
+    .jal-panel,
+    .jal-status-panel {
+        min-width: 0;
+        min-height: 0;
+        border: 1px solid var(--jal-line);
+        border-radius: 14px;
+        background: var(--jal-surface);
+        box-shadow: var(--jal-shadow);
+    }
+
+    .jal-panel {
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr);
+        gap: 8px;
+        padding: clamp(10px, 1.5vw, 16px);
+    }
+
+    .jal-panel-title {
+        margin: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        font-size: clamp(16px, 1.9vw, 23px);
+        font-weight: 600;
+    }
+
+    .jal-panel-title i {
+        color: var(--jal-accent-dark);
+    }
+
+    .jal-control-grid {
+        min-height: 0;
+        display: grid;
+        grid-template-columns: minmax(74px, 0.66fr) minmax(54px, 0.48fr) minmax(112px, 1fr);
+        gap: clamp(8px, 1vw, 14px);
+        align-items: center;
+    }
+
+    .jal-stop-wrap {
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .jal-stop-label {
+        font-size: clamp(13px, 1.5vw, 18px);
+        font-weight: 700;
+        letter-spacing: 0.04em;
+    }
+
+    .jal-stop {
+        width: clamp(58px, 8.8vw, 92px);
+        aspect-ratio: 1;
+        border: 0;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        color: white;
+        background: var(--jal-danger);
+        box-shadow: 0 3px 9px rgba(213, 43, 43, 0.34);
+        cursor: pointer;
+        transition: transform 120ms ease, filter 120ms ease, opacity 120ms ease;
+    }
+
+    .jal-stop:hover:not(:disabled) {
+        filter: brightness(1.08);
+        transform: scale(1.025);
+    }
+
+    .jal-stop:active:not(:disabled) {
+        transform: scale(0.96);
+    }
+
+    .jal-stop i {
+        font-size: clamp(24px, 4vw, 42px);
+    }
+
+    .jal-stop:disabled {
+        opacity: 0.38;
+        cursor: not-allowed;
+        box-shadow: none;
+    }
+
+    .jal-slider-column {
+        height: 100%;
+        min-height: 190px;
+        display: grid;
+        grid-template-rows: auto minmax(120px, 1fr) auto;
+        justify-items: center;
+        align-items: center;
+        gap: 5px;
+    }
+
+    .jal-value {
+        min-width: 58px;
+        padding: 3px 7px;
+        border-radius: 7px;
+        text-align: center;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+        background: var(--jal-surface-strong);
+        border: 1px solid var(--jal-line);
+    }
+
+    .jal-slider {
+        width: 28px;
+        height: 100%;
+        min-height: 125px;
+        margin: 0;
+        accent-color: var(--jal-accent);
+        writing-mode: vertical-lr;
+        appearance: auto;
+        cursor: pointer;
+    }
+
+    .jal-slider.slat-slider {
+        direction: rtl;
+    }
+
+    .jal-slider:disabled {
+        opacity: 0.42;
+        cursor: not-allowed;
+    }
+
+    .jal-end-label {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        font-size: clamp(10px, 1.1vw, 13px);
+        color: var(--jal-muted);
+        white-space: nowrap;
+    }
+
+    .jal-presets {
+        min-width: 0;
+        height: 100%;
+        display: grid;
+        grid-template-rows: repeat(3, minmax(42px, 1fr));
+        gap: clamp(7px, 1vh, 12px);
+        align-items: stretch;
+    }
+
+    .jal-preset {
+        min-width: 0;
+        border: 2px solid var(--jal-accent);
+        border-radius: 8px;
+        padding: 7px 9px;
+        color: var(--jal-text);
+        background: var(--jal-surface-strong);
+        cursor: pointer;
+        font-size: clamp(12px, 1.45vw, 18px);
+        font-weight: 650;
+        line-height: 1.15;
+        transition: background 120ms ease, color 120ms ease, transform 120ms ease, opacity 120ms ease;
+    }
+
+    .jal-preset:hover:not(:disabled),
+    .jal-preset.is-current {
+        color: #06241f;
+        background: color-mix(in srgb, var(--jal-accent) 34%, transparent);
+    }
+
+    .jal-preset:active:not(:disabled) {
+        transform: scale(0.97);
+    }
+
+    .jal-preset:disabled {
+        opacity: 0.38;
+        cursor: not-allowed;
+    }
+
+    .jal-status-panel {
+        padding: clamp(10px, 1.5vw, 18px);
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr) auto;
+        gap: 6px;
+        place-items: center;
+        overflow: hidden;
+    }
+
+    .jal-status-heading {
+        font-size: clamp(16px, 1.9vw, 23px);
+        font-weight: 600;
+    }
+
+    .jal-blind-visual {
+        width: min(100%, 125px);
+        height: min(100%, 215px);
+        min-height: 130px;
+        display: grid;
+        grid-template-rows: 12px minmax(0, 1fr) 11px;
+        justify-items: stretch;
+        align-self: stretch;
+        position: relative;
+    }
+
+    .jal-box-top,
+    .jal-box-bottom {
+        border-radius: 8px;
+        background: var(--jal-text);
+        opacity: 0.9;
+    }
+
+    .jal-box-bottom {
+        height: 5px;
+        align-self: end;
+    }
+
+    .jal-slat-stack {
+        --blind-position: 0%;
+        --slat-angle: 0deg;
+        min-height: 0;
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-start;
+        gap: clamp(4px, 1vh, 8px);
+        padding: 9px 17px;
+        overflow: hidden;
+    }
+
+    .jal-slat-mask {
+        position: absolute;
+        inset: 0 0 auto 0;
+        height: var(--blind-position);
+        overflow: hidden;
+        transition: height 350ms linear;
+    }
+
+    .jal-slat-lines {
+        position: absolute;
+        inset: 9px 17px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+    }
+
+    .jal-slat-line {
+        height: 5px;
+        border-radius: 999px;
+        background: var(--jal-text);
+        transform: rotate(var(--slat-angle));
+        transform-origin: center;
+        transition: transform 300ms ease;
+    }
+
+    .jal-sun {
+        position: absolute;
+        inset: 50% auto auto 50%;
+        transform: translate(-50%, -50%);
+        color: var(--jal-warning);
+        font-size: clamp(25px, 4vw, 43px);
+        opacity: 0.9;
+        z-index: 0;
+    }
+
+    .jal-status-chip {
+        max-width: 100%;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 7px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        font-size: clamp(11px, 1.3vw, 15px);
+        font-weight: 750;
+        text-align: center;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        background: var(--jal-surface-strong);
+        border: 1px solid var(--jal-line);
+    }
+
+    .jal-status-chip[data-status="up"],
+    .jal-status-chip[data-status="open"] {
+        color: #087666;
+    }
+
+    .jal-status-chip[data-status="down"],
+    .jal-status-chip[data-status="closed"] {
+        color: #356a22;
+    }
+
+    .jal-status-chip[data-status="error"] {
+        color: var(--jal-danger);
+    }
+
+    .jal-footer {
+        min-width: 0;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 12px;
+    }
+
+    .jal-run-status {
+        min-width: 0;
+        font-size: clamp(12px, 1.45vw, 18px);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .jal-switch-wrap {
+        display: inline-flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 9px;
+        white-space: nowrap;
+        font-size: clamp(12px, 1.45vw, 18px);
+    }
+
+    .jal-switch {
+        position: relative;
+        display: inline-block;
+        width: 48px;
+        height: 26px;
+    }
+
+    .jal-switch input {
+        width: 0;
+        height: 0;
+        opacity: 0;
+    }
+
+    .jal-switch-track {
+        position: absolute;
+        inset: 0;
+        border-radius: 999px;
+        background: var(--jal-muted);
+        cursor: pointer;
+        transition: background 150ms ease, opacity 150ms ease;
+    }
+
+    .jal-switch-track::before {
+        content: "";
+        position: absolute;
+        width: 20px;
+        height: 20px;
+        left: 3px;
+        top: 3px;
+        border-radius: 50%;
+        background: white;
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.26);
+        transition: transform 150ms ease;
+    }
+
+    .jal-switch input:checked + .jal-switch-track {
+        background: var(--jal-accent);
+    }
+
+    .jal-switch input:checked + .jal-switch-track::before {
+        transform: translateX(22px);
+    }
+
+    .jal-switch input:disabled + .jal-switch-track {
+        opacity: 0.38;
+        cursor: not-allowed;
+    }
+
+    .jal-warning {
+        position: absolute;
+        inset: auto 10px 10px 10px;
+        display: none;
+        z-index: 5;
+        padding: 7px 10px;
+        border-radius: 8px;
+        color: #fff;
+        background: rgba(190, 45, 45, 0.94);
+        font-size: 12px;
+        text-align: center;
+        box-shadow: var(--jal-shadow);
+    }
+
+    .jal-tile.has-warning .jal-warning {
+        display: block;
+    }
+
+    @media (max-width: 760px), (max-height: 440px) {
+        html,
+        body {
+            overflow: auto;
+        }
+
+        .jal-tile {
+            height: auto;
+            min-height: 100%;
+            overflow: visible;
+        }
+
+        .jal-main {
+            grid-template-columns: 1fr;
+        }
+
+        .jal-status-panel {
+            min-height: 190px;
+            grid-template-columns: auto minmax(0, 1fr);
+            grid-template-rows: auto 1fr;
+        }
+
+        .jal-status-heading,
+        .jal-status-chip {
+            grid-column: 1 / -1;
+        }
+
+        .jal-blind-visual {
+            width: 110px;
+            height: 145px;
+        }
+
+        .jal-control-grid {
+            min-height: 230px;
+        }
+    }
+</style>
+
+<div id="jal-tile" class="jal-tile">
+    <header class="jal-header">
+        <h1 id="jal-name" class="jal-title">LCN Jalousie</h1>
+        <div id="jal-reference" class="jal-reference">
+            <i id="jal-reference-icon" class="fa-light fa-circle-exclamation"></i>
+            <span id="jal-reference-text">nicht referenziert</span>
+        </div>
+    </header>
+
+    <main class="jal-main">
+        <section class="jal-panel" aria-labelledby="jal-blind-title">
+            <h2 id="jal-blind-title" class="jal-panel-title">
+                <i class="fa-light fa-blinds"></i>
+                <span>Behang</span>
+            </h2>
+            <div class="jal-control-grid">
+                <div class="jal-stop-wrap">
+                    <span class="jal-stop-label">STOP</span>
+                    <button id="jal-stop" class="jal-stop" type="button" title="Fahrt stoppen" aria-label="Fahrt stoppen">
+                        <i class="fa-light fa-square"></i>
+                    </button>
+                </div>
+
+                <div class="jal-slider-column">
+                    <span id="jal-position-value" class="jal-value">0 %</span>
+                    <input id="jal-position" class="jal-slider blind-slider" type="range" min="0" max="100" step="1" value="0" aria-label="Behangposition">
+                    <span class="jal-end-label"><i class="fa-light fa-arrow-down"></i> ZU</span>
+                </div>
+
+                <div class="jal-presets" role="group" aria-label="Behang-Schnellwahl">
+                    <button class="jal-preset" type="button" data-action="Position" data-value="0"><i class="fa-light fa-arrow-up"></i> AUF&nbsp; 0%</button>
+                    <button class="jal-preset" type="button" data-action="Position" data-value="50"><i class="fa-light fa-arrows-to-line"></i> MITTE&nbsp; 50%</button>
+                    <button class="jal-preset" type="button" data-action="Position" data-value="100"><i class="fa-light fa-arrow-down"></i> ZU&nbsp; 100%</button>
+                </div>
+            </div>
+        </section>
+
+        <section class="jal-status-panel" aria-labelledby="jal-status-title">
+            <div id="jal-status-title" class="jal-status-heading">Status</div>
+            <div class="jal-blind-visual" aria-hidden="true">
+                <div class="jal-box-top"></div>
+                <div id="jal-slat-stack" class="jal-slat-stack">
+                    <i class="jal-sun fa-light fa-sun-bright"></i>
+                    <div id="jal-slat-mask" class="jal-slat-mask">
+                        <div id="jal-slat-lines" class="jal-slat-lines">
+                            <div class="jal-slat-line"></div>
+                            <div class="jal-slat-line"></div>
+                            <div class="jal-slat-line"></div>
+                            <div class="jal-slat-line"></div>
+                            <div class="jal-slat-line"></div>
+                            <div class="jal-slat-line"></div>
+                            <div class="jal-slat-line"></div>
+                            <div class="jal-slat-line"></div>
+                            <div class="jal-slat-line"></div>
+                            <div class="jal-slat-line"></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="jal-box-bottom"></div>
+            </div>
+            <div id="jal-status-chip" class="jal-status-chip" data-status="stopped">
+                <i id="jal-status-icon" class="fa-light fa-stop"></i>
+                <span id="jal-status-text">GESTOPPT</span>
+            </div>
+        </section>
+
+        <section class="jal-panel" aria-labelledby="jal-slat-title">
+            <h2 id="jal-slat-title" class="jal-panel-title">
+                <i class="fa-light fa-sliders"></i>
+                <span>Lamellen</span>
+            </h2>
+            <div class="jal-control-grid" style="grid-template-columns:minmax(38px,.35fr) minmax(54px,.48fr) minmax(112px,1fr)">
+                <div aria-hidden="true"></div>
+
+                <div class="jal-slider-column">
+                    <span id="jal-rotation-value" class="jal-value">0 %</span>
+                    <input id="jal-rotation" class="jal-slider slat-slider" type="range" min="0" max="100" step="1" value="0" aria-label="Lamellenstellung">
+                    <span class="jal-end-label"><i class="fa-light fa-rotate-left"></i> AUF</span>
+                </div>
+
+                <div class="jal-presets" role="group" aria-label="Lamellen-Schnellwahl">
+                    <button class="jal-preset" type="button" data-action="Drehgrad" data-value="100"><i class="fa-light fa-rotate-right"></i> ZU&nbsp; 100%</button>
+                    <button class="jal-preset" type="button" data-action="Drehgrad" data-value="50"><i class="fa-light fa-grip-lines"></i> MITTE&nbsp; 50%</button>
+                    <button class="jal-preset" type="button" data-action="Drehgrad" data-value="0"><i class="fa-light fa-rotate-left"></i> AUF&nbsp; 0%</button>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="jal-footer">
+        <div id="jal-run-status" class="jal-run-status">Laufstatus: GESTOPPT</div>
+        <div class="jal-switch-wrap">
+            <span>ShakeFree:</span>
+            <label class="jal-switch" title="ShakeFree aktivieren oder deaktivieren">
+                <input id="jal-shakefree" type="checkbox" aria-label="ShakeFree">
+                <span class="jal-switch-track"></span>
+            </label>
+            <span id="jal-shakefree-text">Aus</span>
+        </div>
+    </footer>
+
+    <div id="jal-warning" class="jal-warning"></div>
+</div>
+
+<script>
+    'use strict';
+
+    let jalState = {
+        name: 'LCN Jalousie',
+        position: 0,
+        rotation: 0,
+        shakeFree: false,
+        driveState: 0,
+        phase: 0,
+        referenced: false,
+        active: false,
+        controlsEnabled: false,
+        intermediateAllowed: false,
+        stopEnabled: false,
+        statusText: 'GESTOPPT',
+        statusKey: 'stopped',
+        statusIcon: 'stop',
+        errorText: ''
+    };
+
+    const byId = (id) => document.getElementById(id);
+    const clamp = (value) => Math.max(0, Math.min(100, Number(value) || 0));
+    const formatPercent = (value) => `${Math.round(clamp(value))} %`;
+
+    function handleMessage(data) {
+        try {
+            const decoded = typeof data === 'string' ? JSON.parse(data) : data;
+            if (!decoded || typeof decoded !== 'object') {
+                return;
+            }
+            jalState = {...jalState, ...decoded};
+            renderJalousie();
+        } catch (error) {
+            showLocalWarning(`Visualisierungsdaten ungültig: ${error.message}`);
+        }
+    }
+
+    function sendJalousieAction(ident, value) {
+        if (!jalState.active) {
+            showLocalWarning('Die Modulkonfiguration ist nicht freigegeben.');
+            return;
+        }
+        try {
+            requestAction(ident, value);
+        } catch (error) {
+            showLocalWarning(`Aktion konnte nicht gesendet werden: ${error.message}`);
+        }
+    }
+
+    function showLocalWarning(message) {
+        const tile = byId('jal-tile');
+        const warning = byId('jal-warning');
+        warning.textContent = message;
+        tile.classList.add('has-warning');
+        window.setTimeout(() => tile.classList.remove('has-warning'), 5000);
+    }
+
+    function setIcon(element, iconName) {
+        if (!element) {
+            return;
+        }
+        element.className = `fa-light fa-${iconName || 'circle-info'}`;
+    }
+
+    function markPresetButtons(action, value) {
+        document.querySelectorAll(`.jal-preset[data-action="${action}"]`).forEach((button) => {
+            const buttonValue = Number(button.dataset.value);
+            button.classList.toggle('is-current', Math.abs(buttonValue - Number(value)) < 0.6);
+        });
+    }
+
+    function renderJalousie() {
+        const position = clamp(jalState.position);
+        const rotation = clamp(jalState.rotation);
+        const active = Boolean(jalState.active);
+        const controlsEnabled = Boolean(jalState.controlsEnabled);
+        const referenced = Boolean(jalState.referenced);
+        const intermediateAllowed = Boolean(jalState.intermediateAllowed);
+
+        byId('jal-name').textContent = jalState.name || 'LCN Jalousie';
+
+        const positionSlider = byId('jal-position');
+        positionSlider.value = String(Math.round(position));
+        positionSlider.disabled = !controlsEnabled;
+        byId('jal-position-value').textContent = formatPercent(position);
+
+        const rotationSlider = byId('jal-rotation');
+        rotationSlider.value = String(Math.round(rotation));
+        rotationSlider.disabled = !intermediateAllowed;
+        byId('jal-rotation-value').textContent = formatPercent(rotation);
+
+        document.querySelectorAll('.jal-preset[data-action="Position"]').forEach((button) => {
+            const value = Number(button.dataset.value);
+            button.disabled = !controlsEnabled || (value === 50 && !intermediateAllowed);
+        });
+        document.querySelectorAll('.jal-preset[data-action="Drehgrad"]').forEach((button) => {
+            button.disabled = !intermediateAllowed;
+        });
+        markPresetButtons('Position', position);
+        markPresetButtons('Drehgrad', rotation);
+
+        const stopButton = byId('jal-stop');
+        stopButton.disabled = !Boolean(jalState.stopEnabled);
+
+        const shakeSwitch = byId('jal-shakefree');
+        shakeSwitch.checked = Boolean(jalState.shakeFree);
+        shakeSwitch.disabled = !controlsEnabled;
+        byId('jal-shakefree-text').textContent = shakeSwitch.checked ? 'Ein' : 'Aus';
+
+        const referenceBadge = byId('jal-reference');
+        referenceBadge.classList.toggle('is-valid', referenced);
+        byId('jal-reference-text').textContent = referenced ? 'Position gültig' : 'Referenz erforderlich';
+        setIcon(byId('jal-reference-icon'), referenced ? 'circle-check' : 'circle-exclamation');
+
+        const statusChip = byId('jal-status-chip');
+        statusChip.dataset.status = jalState.statusKey || 'stopped';
+        byId('jal-status-text').textContent = jalState.statusText || 'GESTOPPT';
+        setIcon(byId('jal-status-icon'), jalState.statusIcon || 'stop');
+
+        const statusSuffix = referenced
+            ? ` · Behang ${Math.round(position)}% · Lamellen ${Math.round(rotation)}%`
+            : ' · Position nicht referenziert';
+        byId('jal-run-status').textContent = `Laufstatus: ${jalState.statusText || 'GESTOPPT'}${statusSuffix}`;
+
+        // Behanghöhe: 0 % zeigt keine Lamellenfläche, 100 % die volle Fläche.
+        byId('jal-slat-mask').style.height = `${position}%`;
+        // 0 % Lamelle = AUF-Richtung, 100 % = ZU-Richtung.
+        const slatAngle = -55 + rotation * 1.1;
+        byId('jal-slat-lines').style.setProperty('--slat-angle', `${slatAngle}deg`);
+        document.querySelectorAll('.jal-slat-line').forEach((line) => {
+            line.style.transform = `rotate(${slatAngle}deg)`;
+        });
+
+        const warningText = !active
+            ? 'Konfiguration unvollständig – Bedienung gesperrt.'
+            : (Number(jalState.phase) === 9
+                ? 'LCN-Statusabgleich läuft – Bedienung kurz gesperrt.'
+                : (jalState.errorText || ''));
+        const warning = byId('jal-warning');
+        warning.textContent = warningText;
+        byId('jal-tile').classList.toggle('has-warning', warningText !== '');
+    }
+
+    byId('jal-position').addEventListener('input', (event) => {
+        byId('jal-position-value').textContent = formatPercent(event.target.value);
+    });
+    byId('jal-position').addEventListener('change', (event) => {
+        const value = Math.round(clamp(event.target.value));
+        if (value !== 0 && value !== 100 && !jalState.intermediateAllowed) {
+            event.target.value = String(Math.round(clamp(jalState.position)));
+            byId('jal-position-value').textContent = formatPercent(jalState.position);
+            showLocalWarning('Zwischenposition erst nach einer Referenzfahrt verfügbar.');
+            return;
+        }
+        sendJalousieAction('Position', value);
+    });
+
+    byId('jal-rotation').addEventListener('input', (event) => {
+        byId('jal-rotation-value').textContent = formatPercent(event.target.value);
+    });
+    byId('jal-rotation').addEventListener('change', (event) => {
+        if (!jalState.intermediateAllowed) {
+            event.target.value = String(Math.round(clamp(jalState.rotation)));
+            byId('jal-rotation-value').textContent = formatPercent(jalState.rotation);
+            showLocalWarning('Lamellenfahrt erst nach einer Referenzfahrt verfügbar.');
+            return;
+        }
+        sendJalousieAction('Drehgrad', Math.round(clamp(event.target.value)));
+    });
+
+    document.querySelectorAll('.jal-preset').forEach((button) => {
+        button.addEventListener('click', () => {
+            sendJalousieAction(button.dataset.action, Number(button.dataset.value));
+        });
+    });
+
+    byId('jal-stop').addEventListener('click', () => {
+        sendJalousieAction('Stop', true);
+    });
+
+    byId('jal-shakefree').addEventListener('change', (event) => {
+        sendJalousieAction('ShakeFree', Boolean(event.target.checked));
+    });
+
+    renderJalousie();
+</script>

@@ -5,13 +5,13 @@ declare(strict_types=1);
 /**
  * LCN Jalousie – Symcon 9.0 compatibility module.
  *
- * This module creates and maintains the V11.3 object tree, runtime scripts,
+ * This module creates and maintains the V11.4 object tree, runtime scripts,
  * events, links and configuration values below one module instance.
  * The motor interlock and local operation remain in LCN-PRO.
  */
 class LCNJalousie extends IPSModuleStrict
 {
-    private const VERSION = '0.1.6';
+    private const VERSION = '0.1.8';
     private const EXECUTE_PARENT_ACTION = '{7938A5A2-0981-5FE0-BE6C-8AA610D654EB}';
 
     private const STATUS_ACTIVE = 102;
@@ -31,6 +31,9 @@ class LCNJalousie extends IPSModuleStrict
     {
         parent::Create();
 
+        // Eigene, interaktive Kachel über das offizielle Symcon HTML-SDK.
+        $this->SetVisualizationType(1);
+
         $this->RegisterPropertyString('ProjectName', 'Jalousie Wohnzimmer');
         $this->RegisterPropertyInteger('LCNSendModuleID', 0);
         $this->RegisterPropertyInteger('LCNActorModuleID', 0);
@@ -44,6 +47,7 @@ class LCNJalousie extends IPSModuleStrict
 
         $this->RegisterPropertyInteger('TotalTravelMs', 182000);
         $this->RegisterPropertyInteger('TurnMs', 6500);
+        $this->RegisterPropertyInteger('SoftStartMs', 6000);
         $this->RegisterPropertyInteger('BlindTravelMs', 175500);
         $this->RegisterPropertyInteger('ReferenceReserveMs', 5000);
         $this->RegisterPropertyInteger('MaxTravelMs', 187000);
@@ -71,12 +75,19 @@ class LCNJalousie extends IPSModuleStrict
     {
         parent::ApplyChanges();
 
+        // Create() läuft bei bereits vorhandenen Instanzen nach einem Update
+        // nicht erneut. Deshalb wird der Visualisierungstyp hier ebenfalls
+        // gesetzt, damit die HTML-Kachel zuverlässig aktiviert wird.
+        $this->SetVisualizationType(1);
+
         try {
+            $previousGeneratedVersion = $this->ReadAttributeString('GeneratedVersion');
             $this->ensureProfiles();
             $this->ensureInstanceVisualizationVariables();
             $ids = $this->ensureObjectTree();
             $this->ensureRuntimeScripts($ids['scripts']);
             $this->synchronizeConfiguration($ids['configuration']);
+            $this->invalidateReferenceAfterModelUpdate($ids['state'], $previousGeneratedVersion);
             $this->ensureHardwareLinks($ids['lcn']);
             $this->ensureEvents($ids['scripts']);
             $this->ensureVisualizationLinks($ids['visualization'], $ids['control'], $ids['state']);
@@ -146,14 +157,16 @@ class LCNJalousie extends IPSModuleStrict
                     'caption' => '4. Laufzeiten',
                     'expanded' => false,
                     'items' => [
-                        ['type' => 'NumberSpinner', 'name' => 'TotalTravelMs', 'caption' => 'Gesamtlaufzeit', 'suffix' => ' ms', 'minimum' => 1000],
-                        ['type' => 'NumberSpinner', 'name' => 'TurnMs', 'caption' => 'Wendezeit', 'suffix' => ' ms', 'minimum' => 100],
-                        ['type' => 'NumberSpinner', 'name' => 'BlindTravelMs', 'caption' => 'Reine Behanglaufzeit', 'suffix' => ' ms', 'minimum' => 1000],
+                        ['type' => 'NumberSpinner', 'name' => 'TotalTravelMs', 'caption' => 'Gesamtlaufzeit AB-Endlage → AUF-Endlage', 'suffix' => ' ms', 'minimum' => 1000],
+                        ['type' => 'NumberSpinner', 'name' => 'TurnMs', 'caption' => 'Volle Wendezeit / Richtungswechsel', 'suffix' => ' ms', 'minimum' => 100],
+                        ['type' => 'NumberSpinner', 'name' => 'SoftStartMs', 'caption' => 'Sanftanlauf aus Zwischenposition bei gleicher Richtung', 'suffix' => ' ms', 'minimum' => 0],
+                        ['type' => 'NumberSpinner', 'name' => 'BlindTravelMs', 'caption' => 'Reine Behanglaufzeit 0–100 %', 'suffix' => ' ms', 'minimum' => 1000],
                         ['type' => 'NumberSpinner', 'name' => 'ReferenceReserveMs', 'caption' => 'Referenzreserve', 'suffix' => ' ms', 'minimum' => 0],
                         ['type' => 'NumberSpinner', 'name' => 'MaxTravelMs', 'caption' => 'Maximale überwachte Fahrt', 'suffix' => ' ms', 'minimum' => 1000],
                         ['type' => 'NumberSpinner', 'name' => 'ShakeFreeMs', 'caption' => 'ShakeFree-Gegenfahrt', 'suffix' => ' ms', 'minimum' => 100],
                         ['type' => 'NumberSpinner', 'name' => 'PositionTolerance', 'caption' => 'Positionstoleranz', 'suffix' => ' %', 'digits' => 1, 'minimum' => 0.1, 'maximum' => 10],
                         ['type' => 'NumberSpinner', 'name' => 'SlatTolerance', 'caption' => 'Lamellentoleranz', 'suffix' => ' %', 'digits' => 1, 'minimum' => 0.1, 'maximum' => 10],
+                        ['type' => 'Label', 'caption' => 'Bewegungsmodell: 0 % → AB ohne Vorlauf; 100 % → AUF mit voller Wendezeit; Zwischenposition gleiche Richtung mit Sanftanlauf; Gegenrichtung mit dem längeren Wert aus Sanftanlauf und Rest-Wendezeit.'],
                     ],
                 ],
                 [
@@ -217,6 +230,8 @@ class LCNJalousie extends IPSModuleStrict
         }
 
         $parameters = match ($Ident) {
+            // Slider und Schnellwahltasten nutzen denselben sicheren
+            // Controllerpfad. 0 % = vollständig AUF, 100 % = vollständig ZU.
             'Position' => [
                 'ACTION' => 'SET_BLIND',
                 'VALUE'  => max(0, min(100, (int) round((float) $Value))),
@@ -224,6 +239,16 @@ class LCNJalousie extends IPSModuleStrict
             'Drehgrad' => [
                 'ACTION' => 'SET_SLAT',
                 'VALUE'  => max(0, min(100, (int) round((float) $Value))),
+            ],
+            'ShakeFree' => [
+                'ACTION' => 'SET_SHAKEFREE',
+                'VALUE'  => (bool) $Value,
+            ],
+            // Der Controller ermittelt aus den realen Relaisrückmeldungen die
+            // aktive Richtung und sendet genau den zugehörigen KURZ-Befehl
+            // erneut. Es gibt bewusst keinen künstlichen Universal-STOP.
+            'Stop' => [
+                'ACTION' => 'STOP',
             ],
             default => throw new InvalidArgumentException('Unbekannte Visualisierungsaktion: ' . $Ident),
         };
@@ -262,6 +287,42 @@ class LCNJalousie extends IPSModuleStrict
         if ($this->GetStatus() === self::STATUS_ACTIVE) {
             $this->SetSummary($referenced ? 'bereit · Position gültig' : 'bereit · Referenz erforderlich');
         }
+
+        // Laufzeitwerte an alle geöffneten HTML-SDK-Kacheln senden.
+        // Das Datenformat ist absichtlich ein JSON-Objekt und wird in
+        // module.html durch handleMessage() verarbeitet.
+        $this->UpdateVisualizationValue($this->getVisualizationStateJson());
+    }
+
+    public function GetVisualizationTile(): string
+    {
+        $path = __DIR__ . '/module.html';
+        $html = file_get_contents($path);
+        if ($html === false || $html === '') {
+            return '<div style="padding:1rem">Visualisierung konnte nicht geladen werden.</div>';
+        }
+
+        // GetVisualizationTile() wird initial nur einmal aufgerufen. Der
+        // aktuelle Zustand wird deshalb nach dem statischen HTML injiziert.
+        // Spätere Änderungen gelangen über UpdateVisualizationValue() zur
+        // implementierten JavaScript-Funktion handleMessage().
+        $initialState = json_encode(
+            $this->getVisualizationStateJson(),
+            JSON_UNESCAPED_UNICODE
+                | JSON_UNESCAPED_SLASHES
+                | JSON_HEX_TAG
+                | JSON_HEX_AMP
+                | JSON_HEX_APOS
+                | JSON_HEX_QUOT
+        );
+        if ($initialState === false) {
+            $initialState = json_encode('{}');
+        }
+
+        return $html
+            . '<script>handleMessage('
+            . $initialState
+            . ');</script>';
     }
 
     public function CheckConfiguration(): string
@@ -320,6 +381,118 @@ class LCNJalousie extends IPSModuleStrict
             'validation' => $validation,
         ];
         return json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    }
+
+    private function getVisualizationStateJson(): string
+    {
+        $json = json_encode(
+            $this->getVisualizationState(),
+            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION
+        );
+
+        return $json === false ? '{}' : $json;
+    }
+
+    private function getVisualizationState(): array
+    {
+        $position = 0.0;
+        $rotation = 0.0;
+        $driveState = 0;
+        $phase = 0;
+        $referenced = false;
+        $shakeFree = false;
+        $errorText = '';
+
+        $stateCategoryID = @IPS_GetObjectIDByIdent('04_Istwerte', $this->InstanceID);
+        if ($stateCategoryID !== false) {
+            $positionID = @IPS_GetObjectIDByIdent('Ist_Behang', (int) $stateCategoryID);
+            $rotationID = @IPS_GetObjectIDByIdent('Ist_Lamelle', (int) $stateCategoryID);
+            $driveID = @IPS_GetObjectIDByIdent('Fahrstatus', (int) $stateCategoryID);
+            $phaseID = @IPS_GetObjectIDByIdent('Phase', (int) $stateCategoryID);
+            $referenceID = @IPS_GetObjectIDByIdent('Position_Referenziert', (int) $stateCategoryID);
+            $errorID = @IPS_GetObjectIDByIdent('Fehlertext', (int) $stateCategoryID);
+
+            if ($positionID !== false && IPS_VariableExists((int) $positionID)) {
+                $position = (float) GetValueFloat((int) $positionID);
+            }
+            if ($rotationID !== false && IPS_VariableExists((int) $rotationID)) {
+                $rotation = (float) GetValueFloat((int) $rotationID);
+            }
+            if ($driveID !== false && IPS_VariableExists((int) $driveID)) {
+                $driveState = (int) GetValueInteger((int) $driveID);
+            }
+            if ($phaseID !== false && IPS_VariableExists((int) $phaseID)) {
+                $phase = (int) GetValueInteger((int) $phaseID);
+            }
+            if ($referenceID !== false && IPS_VariableExists((int) $referenceID)) {
+                $referenced = (bool) GetValueBoolean((int) $referenceID);
+            }
+            if ($errorID !== false && IPS_VariableExists((int) $errorID)) {
+                $errorText = (string) GetValueString((int) $errorID);
+            }
+        }
+
+        $controlCategoryID = @IPS_GetObjectIDByIdent('03_Bedienung', $this->InstanceID);
+        if ($controlCategoryID !== false) {
+            $shakeID = @IPS_GetObjectIDByIdent('ShakeFree_Aktiv', (int) $controlCategoryID);
+            if ($shakeID !== false && IPS_VariableExists((int) $shakeID)) {
+                $shakeFree = (bool) GetValueBoolean((int) $shakeID);
+            }
+        }
+
+        $position = max(0.0, min(100.0, $position));
+        $rotation = max(0.0, min(100.0, $rotation));
+        $active = $this->GetStatus() === self::STATUS_ACTIVE;
+        $controlsEnabled = $active && !in_array($phase, [7, 9], true);
+        $positionTolerance = max(0.1, $this->ReadPropertyFloat('PositionTolerance'));
+        $intermediateAllowed = $controlsEnabled && ($referenced || $this->ReadPropertyBoolean('AllowUnreferenced'));
+        $moving = in_array($driveState, [1, 2], true);
+        $stopEnabled = $active
+            && ($moving || in_array($phase, [1, 2, 3, 4, 8], true));
+
+        if ($driveState === 1) {
+            $statusText = 'fährt AUF';
+            $statusKey = 'up';
+            $statusIcon = 'arrow-up';
+        } elseif ($driveState === 2) {
+            $statusText = 'fährt ZU';
+            $statusKey = 'down';
+            $statusIcon = 'arrow-down';
+        } elseif ($driveState === 3 || $phase === 7 || $errorText !== '') {
+            $statusText = 'FEHLER';
+            $statusKey = 'error';
+            $statusIcon = 'triangle-exclamation';
+        } elseif ($referenced && $position <= $positionTolerance) {
+            $statusText = 'Geöffnet 100%';
+            $statusKey = 'open';
+            $statusIcon = 'window-maximize';
+        } elseif ($referenced && $position >= 100.0 - $positionTolerance) {
+            $statusText = 'Geschlossen 100%';
+            $statusKey = 'closed';
+            $statusIcon = 'blinds';
+        } else {
+            $statusText = 'GESTOPPT';
+            $statusKey = 'stopped';
+            $statusIcon = 'stop';
+        }
+
+        return [
+            'name' => IPS_GetName($this->InstanceID),
+            'position' => round($position, 1),
+            'rotation' => round($rotation, 1),
+            'shakeFree' => $shakeFree,
+            'driveState' => $driveState,
+            'phase' => $phase,
+            'referenced' => $referenced,
+            'active' => $active,
+            'controlsEnabled' => $controlsEnabled,
+            'intermediateAllowed' => $intermediateAllowed,
+            'stopEnabled' => $stopEnabled,
+            'statusText' => $statusText,
+            'statusKey' => $statusKey,
+            'statusIcon' => $statusIcon,
+            'errorText' => $errorText,
+        ];
     }
 
     private function validateConfiguration(bool $checkLiveRelayState = true): array
@@ -426,12 +599,13 @@ class LCNJalousie extends IPSModuleStrict
 
         $total = $this->ReadPropertyInteger('TotalTravelMs');
         $turn = $this->ReadPropertyInteger('TurnMs');
+        $softStart = $this->ReadPropertyInteger('SoftStartMs');
         $blind = $this->ReadPropertyInteger('BlindTravelMs');
         $reserve = $this->ReadPropertyInteger('ReferenceReserveMs');
         $max = $this->ReadPropertyInteger('MaxTravelMs');
         $window = $this->ReadPropertyInteger('WorkerWindowMs');
-        if ($total <= 0 || $turn <= 0 || $blind <= 0 || $turn + $blind !== $total || $max < $total + $reserve || $window < 1000 || $window > 3000) {
-            $messages[] = 'Zeitparameter sind widersprüchlich: Gesamtlaufzeit = Wendezeit + Behanglaufzeit; MaxFahrt mindestens Gesamtlaufzeit + Reserve; Workerfenster 1000…3000 ms.';
+        if ($total <= 0 || $turn <= 0 || $softStart < 0 || $softStart > $turn || $blind <= 0 || $turn + $blind !== $total || $max < $total + $reserve || $window < 1000 || $window > 3000) {
+            $messages[] = 'Zeitparameter sind widersprüchlich: Gesamtlaufzeit AB→AUF = Wendezeit + Behanglaufzeit; 0 ≤ Sanftanlauf ≤ Wendezeit; MaxFahrt mindestens Gesamtlaufzeit + Reserve; Workerfenster 1000…3000 ms.';
             if ($status === self::STATUS_ACTIVE) {
                 $status = self::STATUS_TIMING_INVALID;
             }
@@ -578,6 +752,23 @@ class LCNJalousie extends IPSModuleStrict
         }
     }
 
+    private function invalidateReferenceAfterModelUpdate(int $stateCategoryID, string $previousVersion): void
+    {
+        if ($previousVersion === '' || $previousVersion === self::VERSION) {
+            return;
+        }
+
+        $referencedID = @IPS_GetObjectIDByIdent('Position_Referenziert', $stateCategoryID);
+        if ($referencedID !== false && IPS_VariableExists((int) $referencedID)) {
+            SetValueBoolean((int) $referencedID, false);
+        }
+        $lastActionID = @IPS_GetObjectIDByIdent('Letzte_Aktion', $stateCategoryID);
+        if ($lastActionID !== false && IPS_VariableExists((int) $lastActionID)) {
+            SetValueString((int) $lastActionID, 'Modulupdate ' . $previousVersion . ' → ' . self::VERSION . ': erneute Referenzfahrt erforderlich');
+        }
+        $this->SetValue('Referenziert', false);
+    }
+
     private function ensureProfiles(): void
     {
         $this->profile('LCNJAL.Position.Int', 1, 0, 100, 1, '', ' %', 'Shutter');
@@ -663,7 +854,8 @@ class LCNJalousie extends IPSModuleStrict
             ['TS_KURZ_AB', 'TS KURZ AB', 3, '', 90, '', true],
             ['TS_Belegung_bestaetigt', 'TS-Belegung bestätigt', 0, '~Switch', 100, false, true],
             ['Gesamtlaufzeit_ms', 'Gesamtlaufzeit [ms]', 1, '', 110, 0, true],
-            ['Wendezeit_ms', 'Wendezeit [ms]', 1, '', 120, 0, true],
+            ['Wendezeit_ms', 'Volle Wendezeit [ms]', 1, '', 120, 0, true],
+            ['Sanftanlauf_ms', 'Sanftanlauf Zwischenposition [ms]', 1, '', 125, 0, true],
             ['Behanglaufzeit_ms', 'Reine Behanglaufzeit [ms]', 1, '', 130, 0, true],
             ['Referenzreserve_ms', 'Referenzreserve [ms]', 1, '', 140, 0, true],
             ['MaxFahrt_ms', 'Maximale Fahrt [ms]', 1, '', 150, 0, true],
@@ -761,6 +953,7 @@ class LCNJalousie extends IPSModuleStrict
             'TS_Belegung_bestaetigt' => ['TSMappingConfirmed', 0],
             'Gesamtlaufzeit_ms' => ['TotalTravelMs', 1],
             'Wendezeit_ms' => ['TurnMs', 1],
+            'Sanftanlauf_ms' => ['SoftStartMs', 1],
             'Behanglaufzeit_ms' => ['BlindTravelMs', 1],
             'Referenzreserve_ms' => ['ReferenceReserveMs', 1],
             'MaxFahrt_ms' => ['MaxTravelMs', 1],
@@ -792,10 +985,10 @@ class LCNJalousie extends IPSModuleStrict
     private function ensureRuntimeScripts(int $scriptsCategoryID): void
     {
         $scripts = [
-            'Controller' => ['10 Controller V11.3', 20, 'Controller.php'],
-            'Worker' => ['20 Worker V11.3', 30, 'Worker.php'],
-            'Healthcheck' => ['30 Healthcheck V11.3', 40, 'Healthcheck.php'],
-            'Diagnose' => ['90 Diagnose V11.3', 90, 'Diagnose.php'],
+            'Controller' => ['10 Controller V11.4', 20, 'Controller.php'],
+            'Worker' => ['20 Worker V11.4', 30, 'Worker.php'],
+            'Healthcheck' => ['30 Healthcheck V11.4', 40, 'Healthcheck.php'],
+            'Diagnose' => ['90 Diagnose V11.4', 90, 'Diagnose.php'],
         ];
         foreach ($scripts as $ident => [$name, $position, $file]) {
             $path = __DIR__ . '/scripts/' . $file;

@@ -24,6 +24,7 @@ def check_required() -> None:
         'LICENSE',
         'LCNJalousie/module.json',
         'LCNJalousie/module.php',
+        'LCNJalousie/module.html',
         'LCNJalousie/scripts/Controller.php',
         'LCNJalousie/scripts/Worker.php',
         'LCNJalousie/scripts/Healthcheck.php',
@@ -178,6 +179,169 @@ def check_native_shutter_visualization() -> None:
             ERRORS.append(f'{controller_path.relative_to(ROOT)}: unknown end-position commands must perform a full reference run ({pattern})')
 
 
+
+
+
+def check_javascript() -> None:
+    html_path = ROOT / 'LCNJalousie' / 'module.html'
+    if not html_path.is_file():
+        return
+    try:
+        subprocess.run(['node', '--version'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        print('NOTICE: Node.js not available; JavaScript syntax check skipped.')
+        return
+
+    import re
+    html = html_path.read_text(encoding='utf-8')
+    scripts = re.findall(r'<script(?:\s[^>]*)?>(.*?)</script>', html, flags=re.S | re.I)
+    for index, script in enumerate(scripts):
+        if script.strip() == '':
+            continue
+        result = subprocess.run(['node', '--check', '-'], input=script, capture_output=True, text=True)
+        if result.returncode != 0:
+            ERRORS.append(
+                f'{html_path.relative_to(ROOT)}: JavaScript block {index} has syntax errors: {result.stdout}{result.stderr}'
+            )
+
+
+def check_custom_html_tile() -> None:
+    module_path = ROOT / 'LCNJalousie' / 'module.php'
+    html_path = ROOT / 'LCNJalousie' / 'module.html'
+    if not module_path.is_file() or not html_path.is_file():
+        return
+    module = module_path.read_text(encoding='utf-8')
+    html = html_path.read_text(encoding='utf-8')
+
+    required_module = [
+        '$this->SetVisualizationType(1)',
+        'public function GetVisualizationTile(): string',
+        '$this->UpdateVisualizationValue($this->getVisualizationStateJson())',
+        "'ShakeFree' => [",
+        "'Stop' => [",
+        "'ACTION' => 'STOP'",
+        "'ACTION' => 'SET_SHAKEFREE'",
+        'private function getVisualizationStateJson(): string',
+        "'statusText' => $statusText",
+        "'intermediateAllowed' => $intermediateAllowed",
+        "$statusText = 'Geöffnet 100%'",
+        "$statusText = 'Geschlossen 100%'",
+    ]
+    for pattern in required_module:
+        if pattern not in module:
+            ERRORS.append(f'{module_path.relative_to(ROOT)}: HTML-SDK tile integration missing ({pattern})')
+
+    required_html = [
+        '<script src="/icons.js"></script>',
+        'function handleMessage(data)',
+        "requestAction(ident, value)",
+        "sendJalousieAction('Stop', true)",
+        "sendJalousieAction('ShakeFree'",
+        'data-action="Position" data-value="0"',
+        'data-action="Position" data-value="50"',
+        'data-action="Position" data-value="100"',
+        'data-action="Drehgrad" data-value="0"',
+        'data-action="Drehgrad" data-value="50"',
+        'data-action="Drehgrad" data-value="100"',
+        'id="jal-position"',
+        'id="jal-rotation"',
+        'id="jal-stop"',
+        'id="jal-shakefree"',
+        'id="jal-status-text"',
+        'GESTOPPT',
+    ]
+    for pattern in required_html:
+        if pattern not in html:
+            ERRORS.append(f'{html_path.relative_to(ROOT)}: requested visualization control missing ({pattern})')
+
+    if '<iframe' in html.lower() or 'fetch(' in html or 'XMLHttpRequest' in html:
+        ERRORS.append(f'{html_path.relative_to(ROOT)}: tile must use the secured HTML-SDK channel only')
+
+
+def check_measured_blind_start_model() -> None:
+    module_path = ROOT / 'LCNJalousie' / 'module.php'
+    controller_path = ROOT / 'LCNJalousie' / 'scripts' / 'Controller.php'
+    worker_path = ROOT / 'LCNJalousie' / 'scripts' / 'Worker.php'
+    diagnose_path = ROOT / 'LCNJalousie' / 'scripts' / 'Diagnose.php'
+    if not module_path.is_file() or not controller_path.is_file() or not worker_path.is_file() or not diagnose_path.is_file():
+        return
+    module = module_path.read_text(encoding='utf-8')
+    controller = controller_path.read_text(encoding='utf-8')
+    worker = worker_path.read_text(encoding='utf-8')
+    diagnose = diagnose_path.read_text(encoding='utf-8')
+    required_module = [
+        "RegisterPropertyInteger('SoftStartMs', 6000)",
+        "'Sanftanlauf_ms' => ['SoftStartMs', 1]",
+        "['Sanftanlauf_ms', 'Sanftanlauf Zwischenposition [ms]'",
+        'invalidateReferenceAfterModelUpdate',
+        "SetValueBoolean((int) $referencedID, false)",
+    ]
+    for pattern in required_module:
+        if pattern not in module:
+            ERRORS.append(f'{module_path.relative_to(ROOT)}: measured start model configuration missing ({pattern})')
+    required_controller = [
+        'function J_SlatTurnTimeMs',
+        'function J_BlindStartDelayMs',
+        "J_ConfigInt($rootID, 'Sanftanlauf_ms')",
+        'if ($direction === J_DIR_DOWN && $startBlind <= $positionTolerance)',
+        'if ($direction === J_DIR_UP && $startBlind >= 100.0 - $positionTolerance)',
+        'return max($softStartMs, J_SlatTurnTimeMs($rootID, $startSlat, $direction));',
+        '$blindStartDelay = J_BlindStartDelayMs',
+    ]
+    for pattern in required_controller:
+        if pattern not in controller:
+            ERRORS.append(f'{controller_path.relative_to(ROOT)}: measured start model missing ({pattern})')
+    if '$blindElapsed = max(0.0, $elapsed - $turnNeeded);' in controller:
+        ERRORS.append(f'{controller_path.relative_to(ROOT)}: blind position must not always start after slat turn time')
+    required_worker = [
+        'function JW_BlindStartDelayMs',
+        "'Sanftanlauf_ms'",
+        '$blindStartDelay = JW_BlindStartDelayMs',
+    ]
+    for pattern in required_worker:
+        if pattern not in worker:
+            ERRORS.append(f'{worker_path.relative_to(ROOT)}: worker start model missing ({pattern})')
+    if '$blindElapsed = max(0.0, $elapsed - $turnNeeded);' in worker:
+        ERRORS.append(f'{worker_path.relative_to(ROOT)}: worker must not use the old slat-only blind delay')
+    if "'Sanftanlauf_ms' => 1" not in diagnose or "Sanftanlauf_ms darf die volle Wendezeit" not in diagnose:
+        ERRORS.append(f'{diagnose_path.relative_to(ROOT)}: diagnostics must validate Sanftanlauf_ms')
+
+
+
+def check_timing_examples() -> None:
+    turn_ms = 6500.0
+    soft_ms = 6000.0
+    blind_ms = 175500.0
+    tolerance = 0.5
+
+    def slat_turn(start_slat: float, direction: int) -> float:
+        return start_slat / 100.0 * turn_ms if direction == 1 else (100.0 - start_slat) / 100.0 * turn_ms
+
+    def delay(start_blind: float, start_slat: float, direction: int) -> float:
+        if direction == 2 and start_blind <= tolerance:
+            return 0.0
+        if direction == 1 and start_blind >= 100.0 - tolerance:
+            return turn_ms
+        return max(soft_ms, slat_turn(start_slat, direction))
+
+    examples = [
+        ('oben nach AB', delay(0.0, 0.0, 2), 0.0),
+        ('unten nach AUF', delay(100.0, 100.0, 1), 6500.0),
+        ('Mitte gleiche Richtung AB', delay(50.0, 100.0, 2), 6000.0),
+        ('Mitte gleiche Richtung AUF', delay(50.0, 0.0, 1), 6000.0),
+        ('Mitte Gegenrichtung AB', delay(50.0, 0.0, 2), 6500.0),
+        ('Mitte Gegenrichtung AUF', delay(50.0, 100.0, 1), 6500.0),
+    ]
+    for name, actual, expected in examples:
+        if actual != expected:
+            ERRORS.append(f'timing model {name}: expected {expected}, got {actual}')
+
+    if 0.0 + blind_ms != 175500.0:
+        ERRORS.append('timing model top-to-bottom full travel must be 175500 ms before reserve')
+    if turn_ms + blind_ms != 182000.0:
+        ERRORS.append('timing model bottom-to-top full travel must be 182000 ms before reserve')
+
+
 def main() -> int:
     check_required()
     check_root_structure()
@@ -187,6 +351,10 @@ def main() -> int:
     check_configurator_configuration_object()
     check_lcn_connection_chain_validation()
     check_native_shutter_visualization()
+    check_custom_html_tile()
+    check_javascript()
+    check_measured_blind_start_model()
+    check_timing_examples()
     check_php()
     if ERRORS:
         print('VALIDATION FAILED')
