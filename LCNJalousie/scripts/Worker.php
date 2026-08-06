@@ -1,7 +1,7 @@
 <?php
 /**
  * Jalousiesteuerung LCN / IP-Symcon 9.0
- * V11.6 - 1-s-Worker mit kurzer Millisekunden-Schlussphase
+ * V11.7 - 1-s-Worker mit kurzer Millisekunden-Schlussphase
  *
  * Der ScriptTimer wird vom Controller auf 1 Sekunde gesetzt. Lange Fahrten
  * werden nicht mit IPS_Sleep abgewartet. Nur im letzten Workerfenster wird
@@ -74,6 +74,15 @@ try {
         $guardUntil = GetValueFloat(JW_ID($rootID, '05_Intern', 'Abbruch_bis_ms'));
         if ($guardUntil > 0.0 && $now >= $guardUntil) {
             $action = 'CANCEL_GUARD';
+        }
+    } elseif ($phase === JW_PHASE_EXTERNAL && ($state === 1 || $state === 2)) {
+        $externalReferenced = GetValueBoolean(JW_ID($rootID, '05_Intern', 'Externe_Referenz_Gesetzt'));
+        $startMs = GetValueFloat(JW_ID($rootID, '05_Intern', 'Startzeit_ms'));
+        $turnMs = (float) GetValueInteger(JW_ID($rootID, '01_Konfiguration', 'Wendezeit_ms'));
+        $requiredMs = JW_DirectionalBlindTravelMs($rootID, $state, $turnMs)
+            + max(0, GetValueInteger(JW_ID($rootID, '01_Konfiguration', 'Referenzreserve_ms')));
+        if (!$externalReferenced && $startMs > 0.0 && $now - $startMs >= $requiredMs) {
+            $action = 'EXTERNAL_REFERENCE';
         }
     } elseif (in_array($phase, [JW_PHASE_BLIND, JW_PHASE_SLAT, JW_PHASE_SHAKE, JW_PHASE_REFERENCE, JW_PHASE_CALIBRATION], true)) {
         $deadline = GetValueFloat(JW_ID($rootID, '05_Intern', 'Zielzeit_ms'));

@@ -1,7 +1,7 @@
 <?php
 /**
  * Jalousiesteuerung LCN / IP-Symcon 9.0
- * V11.6 - Zentraler PHP-Controller
+ * V11.7 - Zentraler PHP-Controller
  *
  * Freigabestand fuer Symcon 9.0 / PHP 8.5.
  *
@@ -54,7 +54,7 @@ try {
     $action = J_DetectAction($rootID, $_IPS);
     J_Log($rootID, 'Controller-Aufruf: ' . $action);
 
-    if ($action !== 'RESET_ERROR'
+    if (!in_array($action, ['RESET_ERROR', 'RELAY_UPDATE', 'STATUS'], true)
         && IPS_FunctionExists('LCNJAL_IsRuntimePermitted')
         && !LCNJAL_IsRuntimePermitted($rootID)) {
         J_SetLastAction($rootID, 'Symcon-Steuerung inaktiv oder Fehler verriegelt; Aufruf verworfen');
@@ -78,12 +78,6 @@ try {
         J_Reject($rootID, 'LCN-Statusabgleich laeuft. Auftrag nach Abschluss erneut ausfuehren.');
         return;
     }
-    if ($phaseBeforeAction === J_PHASE_CALIBRATION
-        && !in_array($action, ['DEADLINE', 'HEALTHCHECK', 'STATUS', 'STOP', 'RELAY_UPDATE', 'SET_SHAKEFREE'], true)) {
-        J_SetLastAction($rootID, 'Kalibrierfenster aktiv; neuer Symcon-Fahrbefehl verworfen');
-        return;
-    }
-
     switch ($action) {
         case 'SET_BLIND':
             J_RequestBlind($rootID, (float) ($_IPS['VALUE'] ?? 0));
@@ -156,6 +150,10 @@ try {
 
         case 'HEALTHCHECK':
             J_RunHealthcheck($rootID);
+            break;
+
+        case 'EXTERNAL_REFERENCE':
+            J_HandleExternalReferenceDeadline($rootID, (int) ($_IPS['ORDER'] ?? -1));
             break;
 
         case 'STATUS':
@@ -285,6 +283,49 @@ function J_MarkRelaysOff(int $rootID): void
     }
 }
 
+function J_PrepareStartConfirmation(int $rootID): void
+{
+    SetValueFloat(J_ID($rootID, '05_Intern', 'Bestaetigung_bis_ms'), 0.0);
+    SetValueBoolean(J_ID($rootID, '05_Intern', 'Startstatus_Nachfrage_Aktiv'), false);
+    SetValueBoolean(J_ID($rootID, '05_Intern', 'Startstatus_Relais_AUF_Empfangen'), false);
+    SetValueBoolean(J_ID($rootID, '05_Intern', 'Startstatus_Relais_AB_Empfangen'), false);
+    SetValueFloat(J_ID($rootID, '05_Intern', 'Befehl_gesendet_ms'), 0.0);
+}
+
+function J_ArmStartConfirmation(int $rootID): void
+{
+    $sentAt = J_NowMs();
+    SetValueFloat(J_ID($rootID, '05_Intern', 'Befehl_gesendet_ms'), $sentAt);
+    SetValueFloat(
+        J_ID($rootID, '05_Intern', 'Bestaetigung_bis_ms'),
+        $sentAt + max(500, J_ConfigInt($rootID, 'Relaisbestaetigung_ms'))
+    );
+    J_SetWorker($rootID, true);
+}
+
+function J_PrepareStopConfirmation(int $rootID, bool $preserveVerifiedRetry = false): void
+{
+    SetValueFloat(J_ID($rootID, '05_Intern', 'Stop_bis_ms'), 0.0);
+    SetValueBoolean(J_ID($rootID, '05_Intern', 'Stopstatus_Nachfrage_Aktiv'), false);
+    SetValueBoolean(J_ID($rootID, '05_Intern', 'Stopstatus_Relais_AUF_Empfangen'), false);
+    SetValueBoolean(J_ID($rootID, '05_Intern', 'Stopstatus_Relais_AB_Empfangen'), false);
+    if (!$preserveVerifiedRetry) {
+        SetValueBoolean(J_ID($rootID, '05_Intern', 'Stop_Wiederholung_Gesendet'), false);
+    }
+    SetValueFloat(J_ID($rootID, '05_Intern', 'Befehl_gesendet_ms'), 0.0);
+}
+
+function J_ArmStopConfirmation(int $rootID): void
+{
+    $sentAt = J_NowMs();
+    SetValueFloat(J_ID($rootID, '05_Intern', 'Befehl_gesendet_ms'), $sentAt);
+    SetValueFloat(
+        J_ID($rootID, '05_Intern', 'Stop_bis_ms'),
+        $sentAt + max(500, J_ConfigInt($rootID, 'Stoppbestaetigung_ms'))
+    );
+    J_SetWorker($rootID, true);
+}
+
 function J_ConfigInt(int $rootID, string $ident): int
 {
     return GetValueInteger(J_ID($rootID, '01_Konfiguration', $ident));
@@ -303,6 +344,53 @@ function J_ConfigBool(int $rootID, string $ident): bool
 function J_ConfigString(int $rootID, string $ident): string
 {
     return GetValueString(J_ID($rootID, '01_Konfiguration', $ident));
+}
+
+function J_HardwareBinding(int $rootID): array
+{
+    static $cache = [];
+    if (isset($cache[$rootID])) {
+        return $cache[$rootID];
+    }
+    if (!IPS_FunctionExists('LCNJAL_GetHardwareBinding')) {
+        throw new RuntimeException('Die sichere Hardwarebindung des Moduls ist nicht verfügbar.');
+    }
+
+    $binding = json_decode(LCNJAL_GetHardwareBinding($rootID), true);
+    if (!is_array($binding)) {
+        throw new RuntimeException('Die sichere Hardwarebindung ist ungültig.');
+    }
+    foreach ([
+        'sendModuleID',
+        'actorModuleID',
+        'relayUpVariableID',
+        'relayDownVariableID',
+        'gt8LongUpVariableID',
+        'gt8LongDownVariableID',
+        'tsShortUp',
+        'tsShortDown',
+    ] as $key) {
+        if (!array_key_exists($key, $binding)) {
+            throw new RuntimeException('Hardwarebindung unvollständig: ' . $key);
+        }
+    }
+
+    $cache[$rootID] = $binding;
+    return $binding;
+}
+
+function J_ConfiguredRelayIDs(int $rootID): array
+{
+    $binding = J_HardwareBinding($rootID);
+    return [(int) $binding['relayUpVariableID'], (int) $binding['relayDownVariableID']];
+}
+
+function J_IsConfiguredRelayTrigger(int $rootID, int $variableID): bool
+{
+    if ($variableID <= 0) {
+        return false;
+    }
+    return in_array($variableID, J_ConfiguredRelayIDs($rootID), true);
 }
 
 function J_Log(int $rootID, string $message): void
@@ -328,16 +416,17 @@ function J_DetectAction(int $rootID, array $ips): string
         return 'STATUS';
     }
 
+    $binding = J_HardwareBinding($rootID);
     $ids = [
         'Soll_Behang'      => J_ID($rootID, '03_Bedienung', 'Soll_Behang'),
         'Soll_Lamelle'     => J_ID($rootID, '03_Bedienung', 'Soll_Lamelle'),
         'ShakeFree_Aktiv'  => J_ID($rootID, '03_Bedienung', 'ShakeFree_Aktiv'),
         'Stopp'            => J_ID($rootID, '03_Bedienung', 'Stopp'),
         'Referenzfahrt'    => J_ID($rootID, '03_Bedienung', 'Referenzfahrt'),
-        'Relais_AUF'       => J_ConfigInt($rootID, 'Relais_AUF_ID'),
-        'Relais_AB'        => J_ConfigInt($rootID, 'Relais_AB_ID'),
-        'GT8_LANG_AUF'     => J_ConfigInt($rootID, 'GT8_LANG_AUF_ID'),
-        'GT8_LANG_AB'      => J_ConfigInt($rootID, 'GT8_LANG_AB_ID'),
+        'Relais_AUF'       => (int) $binding['relayUpVariableID'],
+        'Relais_AB'        => (int) $binding['relayDownVariableID'],
+        'GT8_LANG_AUF'     => (int) $binding['gt8LongUpVariableID'],
+        'GT8_LANG_AB'      => (int) $binding['gt8LongDownVariableID'],
     ];
 
     return match ($variableID) {
@@ -396,8 +485,7 @@ function J_IsDirection(int $state): bool
 
 function J_RelayState(int $rootID): int
 {
-    $upID = J_ConfigInt($rootID, 'Relais_AUF_ID');
-    $downID = J_ConfigInt($rootID, 'Relais_AB_ID');
+    [$upID, $downID] = J_ConfiguredRelayIDs($rootID);
     if (!IPS_VariableExists($upID) || !IPS_VariableExists($downID)) {
         throw new RuntimeException('Relaisstatus-ID ist ungueltig.');
     }
@@ -481,51 +569,46 @@ function J_LcnModuleForVariable(int $variableID): int
     return 0;
 }
 
-function J_SendDirection(int $rootID, int $direction): bool
+function J_SendDirection(int $rootID, int $direction, int $expectedRelayState): bool
 {
     if (!J_IsDirection($direction)) {
         J_SetError($rootID, 'Ungueltige Fahrtrichtung: ' . $direction, false);
         return false;
     }
-
-    if (!IPS_FunctionExists('LCN_SendCommand')) {
-        J_SetError($rootID, 'LCN_SendCommand ist in diesem Symcon-Kernel nicht registriert. LCN-Modulinstallation pruefen.', false);
+    if (!IPS_FunctionExists('LCNJAL_SendDirectionCommand')) {
+        J_SetError($rootID, 'Sichere richtungsgebundene Befehlsfunktion fehlt.', false);
         return false;
     }
 
-    $instanceID = J_ConfigInt($rootID, 'LCN_Sendemodulinstanz_ID');
-    if (!J_LcnInstanceReady($instanceID)) {
-        J_SetError($rootID, 'LCN-Sendemodulinstanz ist nicht aktiv: ' . $instanceID, false);
+    try {
+        $ok = LCNJAL_SendDirectionCommand($rootID, $direction, $expectedRelayState);
+        J_Log($rootID, 'Sicherer Richtungsbefehl ' . ($direction === J_DIR_UP ? 'AUF' : 'ZU') . ' bei erwartetem Relaiszustand ' . $expectedRelayState . ' => ' . ($ok ? 'OK' : 'FEHLER'));
+        return $ok;
+    } catch (Throwable $e) {
+        // Ein nicht bestätigter START bei weiterhin real ausgeschalteten Relais
+        // ist kein gefährlicher Motorzustand. Er wird ohne dauerhafte
+        // Fehlerverriegelung verworfen und durch das Spätstart-Schutzfenster
+        // abgesichert. STOP-Fehler bei aktivem Relais bleiben dagegen
+        // sicherheitskritisch und verriegeln die Instanz.
+        if ($expectedRelayState === J_DIR_NONE && J_RelayState($rootID) === J_DIR_NONE) {
+            $message = 'Starttelegramm konnte nicht sicher gesendet werden: ' . $e->getMessage();
+            SetValueString(J_ID($rootID, '04_Istwerte', 'Fehlertext'), $message);
+            J_ClearPending($rootID);
+            SetValueInteger(J_ID($rootID, '05_Intern', 'Folge_Lamelle'), -1);
+            SetValueInteger(J_ID($rootID, '05_Intern', 'Folge_Richtung'), J_DIR_NONE);
+            J_BeginCancelGuard($rootID, 'Startsendung verworfen; Spätstart-Schutz ohne Fehlerverriegelung', false);
+            return false;
+        }
+        J_SetError($rootID, 'Richtungsbefehl gesperrt: ' . $e->getMessage(), false);
         return false;
     }
-
-    $data = $direction === J_DIR_UP
-        ? J_ConfigString($rootID, 'TS_KURZ_AUF')
-        : J_ConfigString($rootID, 'TS_KURZ_AB');
-
-    if (!J_ConfigBool($rootID, 'TS_Belegung_bestaetigt')) {
-        J_SetError($rootID, 'TS-Belegung ist nicht vor Ort bestaetigt. Keine LCN-Taste wird gesendet.', false);
-        return false;
-    }
-
-    if (!J_ValidateTS($data)) {
-        J_SetError($rootID, 'Ungueltiges TS-KURZ-Datenfeld: ' . $data, false);
-        return false;
-    }
-
-    $ok = LCN_SendCommand($instanceID, 'TS', $data);
-    J_Log($rootID, 'LCN_SendCommand(' . $instanceID . ', TS, ' . $data . ') => ' . ($ok ? 'OK' : 'FEHLER'));
-    if (!$ok) {
-        J_SetError($rootID, 'LCN_SendCommand wurde von Symcon nicht angenommen.', false);
-    }
-    return $ok;
 }
 
 function J_SendStopForRealDirection(int $rootID): bool
 {
     $state = J_RelayState($rootID);
     if ($state === J_DIR_UP || $state === J_DIR_DOWN) {
-        return J_SendDirection($rootID, $state);
+        return J_SendDirection($rootID, $state, $state);
     }
     if ($state === J_DIR_BOTH) {
         J_SetError($rootID, 'AUF und AB sind gleichzeitig aktiv. LCN-Verriegelung pruefen.', false);
@@ -778,6 +861,7 @@ function J_UpdatePositionToNow(int $rootID, ?float $nowMs = null): void
 
 function J_SnapshotRealStart(int $rootID, int $direction, float $nowMs): void
 {
+    SetValueBoolean(J_ID($rootID, '05_Intern', 'Startstatus_Nachfrage_Aktiv'), false);
     SetValueFloat(J_ID($rootID, '05_Intern', 'Startzeit_ms'), $nowMs);
     SetValueFloat(J_ID($rootID, '05_Intern', 'Start_Behang'), GetValueFloat(J_ID($rootID, '04_Istwerte', 'Ist_Behang')));
     SetValueFloat(J_ID($rootID, '05_Intern', 'Start_Lamelle'), GetValueFloat(J_ID($rootID, '04_Istwerte', 'Ist_Lamelle')));
@@ -796,9 +880,26 @@ function J_Reject(int $rootID, string $message): void
     J_SetLastAction($rootID, 'ABGEWIESEN: ' . $message);
 }
 
+function J_RejectWhileExternalHasPriority(int $rootID, string $request): bool
+{
+    $phase = GetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase'));
+    $state = J_RelayState($rootID);
+    $automatic = GetValueBoolean(J_ID($rootID, '04_Istwerte', 'Automatik_Aktiv'));
+    if ($phase !== J_PHASE_EXTERNAL && !(!$automatic && J_IsDirection($state))) {
+        return false;
+    }
+
+    J_ClearPending($rootID);
+    J_SetLastAction($rootID, $request . ' verworfen: reale LCN-/GT8-Fahrt hat Vorrang');
+    return true;
+}
+
 function J_RequestBlind(int $rootID, float $target): void
 {
     $target = J_Clamp($target);
+    if (J_RejectWhileExternalHasPriority($rootID, 'Symcon-Behangziel')) {
+        return;
+    }
     SetValueInteger(J_ID($rootID, '03_Bedienung', 'Soll_Behang'), (int) round($target));
     J_ReconcileRelayState($rootID);
     J_UpdatePositionToNow($rootID);
@@ -851,6 +952,7 @@ function J_StartBlindNow(int $rootID, float $target, bool $explicitReference): v
     SetValueInteger(J_ID($rootID, '05_Intern', 'Folge_Lamelle'), -1);
     SetValueInteger(J_ID($rootID, '05_Intern', 'Folge_Richtung'), J_DIR_NONE);
     SetValueBoolean(J_ID($rootID, '05_Intern', 'Shake_Nachlauf_Aktiv'), false);
+    SetValueBoolean(J_ID($rootID, '05_Intern', 'Externe_Referenz_Gesetzt'), false);
 
     $hardEnd = $target <= 0.0 || $target >= 100.0;
     $positionReferenced = GetValueBoolean(J_ID($rootID, '04_Istwerte', 'Position_Referenziert'));
@@ -871,8 +973,8 @@ function J_StartBlindNow(int $rootID, float $target, bool $explicitReference): v
     SetValueFloat(J_ID($rootID, '05_Intern', 'Ziel_Lamelle'), (float) $targetSlat);
     SetValueBoolean(J_ID($rootID, '05_Intern', 'Stop_Angefordert'), false);
     SetValueBoolean(J_ID($rootID, '05_Intern', 'Endlage_Hart'), $hardEnd || $referenceRun);
-    SetValueFloat(J_ID($rootID, '05_Intern', 'Bestaetigung_bis_ms'), J_NowMs() + J_ConfigInt($rootID, 'Relaisbestaetigung_ms'));
-    SetValueFloat(J_ID($rootID, '05_Intern', 'Stop_bis_ms'), 0.0);
+    J_PrepareStartConfirmation($rootID);
+    J_PrepareStopConfirmation($rootID);
     SetValueFloat(J_ID($rootID, '05_Intern', 'Zielzeit_ms'), 0.0);
     SetValueBoolean(J_ID($rootID, '05_Intern', 'Abbruch_Wartet_Auf_Start'), false);
     SetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase'), J_PHASE_WAIT_START);
@@ -884,11 +986,13 @@ function J_StartBlindNow(int $rootID, float $target, bool $explicitReference): v
     $actionName = $explicitReference
         ? 'Referenzfahrt '
         : ($referenceRun ? 'Automatische Referenzfahrt ' : 'Behangfahrt ');
-    J_SetLastAction($rootID, $actionName . ($direction === J_DIR_UP ? 'AUF' : 'AB') . ', Auftrag ' . $order);
-    J_SetWorker($rootID, true);
-    if (!J_SendDirection($rootID, $direction)) {
-        J_SetWorker($rootID, false);
+    J_SetLastAction($rootID, $actionName . ($direction === J_DIR_UP ? 'AUF' : 'AB') . ', Auftrag ' . $order . '; wartet auf Sendefreigabe');
+    J_SetWorker($rootID, false);
+    if (!J_SendDirection($rootID, $direction, J_DIR_NONE)) {
+        return;
     }
+    J_ArmStartConfirmation($rootID);
+    J_SetLastAction($rootID, $actionName . ($direction === J_DIR_UP ? 'AUF' : 'AB') . ', Auftrag ' . $order . '; LCN-Telegramm angenommen, Startbestätigung läuft');
 }
 
 function J_RequestSlat(int $rootID, int $target, int $forcedDirection): void
@@ -972,22 +1076,27 @@ function J_StartSlatNow(int $rootID, int $target, int $forcedDirection): void
     SetValueFloat(J_ID($rootID, '05_Intern', 'Ziel_Lamelle'), (float) $target);
     SetValueBoolean(J_ID($rootID, '05_Intern', 'Stop_Angefordert'), false);
     SetValueBoolean(J_ID($rootID, '05_Intern', 'Endlage_Hart'), false);
-    SetValueFloat(J_ID($rootID, '05_Intern', 'Bestaetigung_bis_ms'), J_NowMs() + J_ConfigInt($rootID, 'Relaisbestaetigung_ms'));
-    SetValueFloat(J_ID($rootID, '05_Intern', 'Stop_bis_ms'), 0.0);
+    J_PrepareStartConfirmation($rootID);
+    J_PrepareStopConfirmation($rootID);
     SetValueFloat(J_ID($rootID, '05_Intern', 'Zielzeit_ms'), 0.0);
     SetValueBoolean(J_ID($rootID, '05_Intern', 'Abbruch_Wartet_Auf_Start'), false);
     SetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase'), J_PHASE_WAIT_START);
     SetValueBoolean(J_ID($rootID, '04_Istwerte', 'Automatik_Aktiv'), true);
 
-    J_SetLastAction($rootID, 'Lamellenfahrt auf ' . $target . ' %, Auftrag ' . $order);
-    J_SetWorker($rootID, true);
-    if (!J_SendDirection($rootID, $direction)) {
-        J_SetWorker($rootID, false);
+    J_SetLastAction($rootID, 'Lamellenfahrt auf ' . $target . ' %, Auftrag ' . $order . '; wartet auf Sendefreigabe');
+    J_SetWorker($rootID, false);
+    if (!J_SendDirection($rootID, $direction, J_DIR_NONE)) {
+        return;
     }
+    J_ArmStartConfirmation($rootID);
+    J_SetLastAction($rootID, 'Lamellenfahrt auf ' . $target . ' %, Auftrag ' . $order . '; LCN-Telegramm angenommen, Startbestätigung läuft');
 }
 
 function J_RequestReference(int $rootID, int $direction): void
 {
+    if (J_RejectWhileExternalHasPriority($rootID, 'Symcon-Referenzfahrt')) {
+        return;
+    }
     if (!J_IsDirection($direction)) {
         J_Reject($rootID, 'Ungueltige Referenzrichtung.');
         return;
@@ -1015,9 +1124,19 @@ function J_ShouldQueue(int $rootID): bool
 function J_RequestStop(int $rootID, string $reason): void
 {
     J_ReconcileRelayState($rootID);
+    if (J_RejectWhileExternalHasPriority($rootID, $reason)) {
+        return;
+    }
 
     $phase = GetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase'));
     $state = J_RelayState($rootID);
+
+    if (GetValueBoolean(J_ID($rootID, '05_Intern', 'Stop_Angefordert'))) {
+        J_ClearPending($rootID);
+        J_SetLastAction($rootID, $reason . ': STOP bereits gesendet; auf reale AUS-Bestätigung warten');
+        J_SetWorker($rootID, true);
+        return;
+    }
 
     // Ein STOP im Stillstand darf den Start-/Statusabgleich nicht vorzeitig aufheben.
     // Bei einem real aktiven Relais bleibt der zustandsabhaengige STOP trotzdem wirksam.
@@ -1058,6 +1177,12 @@ function J_QueueAfterStop(int $rootID, int $pendingType, float $value, int $dire
     $phase = GetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase'));
     $state = J_RelayState($rootID);
 
+    if (GetValueBoolean(J_ID($rootID, '05_Intern', 'Stop_Angefordert'))) {
+        J_SetLastAction($rootID, $reason . ': Folgeauftrag gespeichert; bereits gesendeter STOP wird nicht wiederholt');
+        J_SetWorker($rootID, true);
+        return;
+    }
+
     if ($phase === J_PHASE_STOPPING) {
         J_SetLastAction($rootID, $reason . ': ersetzt wartenden Folgeauftrag');
         J_SetWorker($rootID, true);
@@ -1084,6 +1209,8 @@ function J_BeginCancelGuard(int $rootID, string $reason, bool $errorAfter): void
     SetValueInteger(J_ID($rootID, '05_Intern', 'Auftragstyp'), J_ORDER_NONE);
     SetValueInteger(J_ID($rootID, '05_Intern', 'Erwartete_Richtung'), J_DIR_NONE);
     SetValueBoolean(J_ID($rootID, '05_Intern', 'Stop_Angefordert'), false);
+    J_PrepareStartConfirmation($rootID);
+    J_PrepareStopConfirmation($rootID);
     SetValueBoolean(J_ID($rootID, '05_Intern', 'Abbruch_Wartet_Auf_Start'), true);
     SetValueBoolean(J_ID($rootID, '05_Intern', 'Abbruch_Fehlerphase'), $errorAfter);
     SetValueFloat(J_ID($rootID, '05_Intern', 'Abbruch_bis_ms'), J_NowMs() + J_ConfigInt($rootID, 'Spaetstart_Schutz_ms'));
@@ -1109,14 +1236,21 @@ function J_BeginStopWatch(int $rootID, string $reason, bool $errorAfter): void
     SetValueBoolean(J_ID($rootID, '05_Intern', 'Abbruch_Wartet_Auf_Start'), false);
     SetValueBoolean(J_ID($rootID, '05_Intern', 'Abbruch_Fehlerphase'), $errorAfter);
     SetValueBoolean(J_ID($rootID, '05_Intern', 'Stop_Angefordert'), true);
-    SetValueFloat(J_ID($rootID, '05_Intern', 'Stop_bis_ms'), J_NowMs() + J_ConfigInt($rootID, 'Stoppbestaetigung_ms'));
+    J_PrepareStopConfirmation($rootID);
     SetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase'), J_PHASE_STOPPING);
     SetValueBoolean(J_ID($rootID, '04_Istwerte', 'Automatik_Aktiv'), false);
-    J_SetWorker($rootID, true);
-    J_SetLastAction($rootID, $reason . '; STOP auf reale Richtung');
+    J_SetWorker($rootID, false);
+    J_SetLastAction($rootID, $reason . '; STOP wartet auf Sendefreigabe');
     if (!J_SendStopForRealDirection($rootID)) {
         J_SetError($rootID, 'STOP-Befehl konnte nicht gesendet werden.', false);
+        return;
     }
+    if (J_RelayState($rootID) === J_DIR_NONE) {
+        J_HandleRealStop($rootID, $state);
+        return;
+    }
+    J_ArmStopConfirmation($rootID);
+    J_SetLastAction($rootID, $reason . '; STOP-Telegramm angenommen, AUS-Bestätigung läuft');
 }
 
 function J_ClearPending(int $rootID): void
@@ -1156,6 +1290,10 @@ function J_StartPending(int $rootID): void
 
 function J_HandleRelayUpdate(int $rootID, bool $coalesce = false, int $triggerVariableID = 0): void
 {
+    if ($triggerVariableID > 0 && !J_IsConfiguredRelayTrigger($rootID, $triggerVariableID)) {
+        J_Log($rootID, 'Fremde oder veraltete Relaismeldung #' . $triggerVariableID . ' verworfen.');
+        return;
+    }
     if ($coalesce) {
         $delay = J_ConfigInt($rootID, 'Relais_Koaleszenz_ms');
         if ($delay > 0) {
@@ -1167,6 +1305,28 @@ function J_HandleRelayUpdate(int $rootID, bool $coalesce = false, int $triggerVa
     $oldState = GetValueInteger(J_ID($rootID, '04_Istwerte', 'Fahrstatus'));
     $newState = J_RelayState($rootID);
 
+    if ($triggerVariableID > 0) {
+        $binding = J_HardwareBinding($rootID);
+        $isUpTrigger = $triggerVariableID === (int) $binding['relayUpVariableID'];
+        $isDownTrigger = $triggerVariableID === (int) $binding['relayDownVariableID'];
+        if (GetValueBoolean(J_ID($rootID, '05_Intern', 'Startstatus_Nachfrage_Aktiv'))) {
+            if ($isUpTrigger) {
+                SetValueBoolean(J_ID($rootID, '05_Intern', 'Startstatus_Relais_AUF_Empfangen'), true);
+            }
+            if ($isDownTrigger) {
+                SetValueBoolean(J_ID($rootID, '05_Intern', 'Startstatus_Relais_AB_Empfangen'), true);
+            }
+        }
+        if (GetValueBoolean(J_ID($rootID, '05_Intern', 'Stopstatus_Nachfrage_Aktiv'))) {
+            if ($isUpTrigger) {
+                SetValueBoolean(J_ID($rootID, '05_Intern', 'Stopstatus_Relais_AUF_Empfangen'), true);
+            }
+            if ($isDownTrigger) {
+                SetValueBoolean(J_ID($rootID, '05_Intern', 'Stopstatus_Relais_AB_Empfangen'), true);
+            }
+        }
+    }
+
     // Waehrend STATUS_SYNC werden Relaisrueckmeldungen nur als frischer Istzustand
     // uebernommen. Erst SYNC_COMPLETE entscheidet ueber IDLE oder externe Fahrt.
     if (GetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase')) === J_PHASE_SYNC) {
@@ -1174,10 +1334,10 @@ function J_HandleRelayUpdate(int $rootID, bool $coalesce = false, int $triggerVa
         // Statusvariable nach der aktuellen LCN_RequestStatus-Anfrage empfangen wurde.
         // VariableUpdated allein reicht bei einer erneuten Initialisierung im selben
         // Kernel nicht aus, weil ein alter Update-Zeitstempel noch nach Kernelstart liegt.
-        if ($triggerVariableID === J_ConfigInt($rootID, 'Relais_AUF_ID')) {
+        if ($triggerVariableID === (int) J_HardwareBinding($rootID)['relayUpVariableID']) {
             SetValueBoolean(J_ID($rootID, '05_Intern', 'Sync_Relais_AUF_Empfangen'), true);
         }
-        if ($triggerVariableID === J_ConfigInt($rootID, 'Relais_AB_ID')) {
+        if ($triggerVariableID === (int) J_HardwareBinding($rootID)['relayDownVariableID']) {
             SetValueBoolean(J_ID($rootID, '05_Intern', 'Sync_Relais_AB_Empfangen'), true);
         }
         SetValueInteger(J_ID($rootID, '04_Istwerte', 'Fahrstatus'), $newState);
@@ -1202,7 +1362,9 @@ function J_HandleRelayUpdate(int $rootID, bool $coalesce = false, int $triggerVa
         SetValueInteger(J_ID($rootID, '05_Intern', 'Folge_Lamelle'), -1);
         SetValueInteger(J_ID($rootID, '05_Intern', 'Folge_Richtung'), J_DIR_NONE);
         SetValueBoolean(J_ID($rootID, '05_Intern', 'Stop_Angefordert'), false);
+        SetValueBoolean(J_ID($rootID, '05_Intern', 'Stopstatus_Nachfrage_Aktiv'), false);
         J_SnapshotRealStart($rootID, $newState, $now);
+        SetValueBoolean(J_ID($rootID, '05_Intern', 'Externe_Referenz_Gesetzt'), false);
         SetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase'), J_PHASE_EXTERNAL);
         SetValueBoolean(J_ID($rootID, '04_Istwerte', 'Automatik_Aktiv'), false);
         SetValueInteger(J_ID($rootID, '04_Istwerte', 'Fahrstatus'), $newState);
@@ -1230,6 +1392,10 @@ function J_HandleRealStart(int $rootID, int $direction, float $now): void
     $orderType = GetValueInteger(J_ID($rootID, '05_Intern', 'Auftragstyp'));
 
     if ($phase === J_PHASE_WAIT_START && $expected === $direction && $orderType !== J_ORDER_NONE) {
+        SetValueFloat(J_ID($rootID, '05_Intern', 'Bestaetigung_bis_ms'), 0.0);
+        SetValueBoolean(J_ID($rootID, '05_Intern', 'Startstatus_Nachfrage_Aktiv'), false);
+        SetValueBoolean(J_ID($rootID, '05_Intern', 'Startstatus_Relais_AUF_Empfangen'), false);
+        SetValueBoolean(J_ID($rootID, '05_Intern', 'Startstatus_Relais_AB_Empfangen'), false);
         $duration = GetValueInteger(J_ID($rootID, '05_Intern', 'Geplante_Dauer_ms'));
         SetValueFloat(J_ID($rootID, '05_Intern', 'Zielzeit_ms'), $now + $duration);
         $runPhase = match ($orderType) {
@@ -1246,16 +1412,47 @@ function J_HandleRealStart(int $rootID, int $direction, float $now): void
         return;
     }
 
+    // Ein realer LCN-/GT8-Befehl hat Vorrang vor einem gleichzeitig wartenden
+    // Symcon-Auftrag. Startet die andere Richtung, wird kein STOP gesendet und
+    // keine Fehlerverriegelung ausgelöst; der Symcon-Auftrag wird verworfen.
+    if ($phase === J_PHASE_WAIT_START
+        && J_IsDirection($expected)
+        && $orderType !== J_ORDER_NONE
+        && $expected !== $direction) {
+        J_NextOrder($rootID);
+        J_ClearPending($rootID);
+        SetValueInteger(J_ID($rootID, '05_Intern', 'Auftragstyp'), J_ORDER_NONE);
+        SetValueInteger(J_ID($rootID, '05_Intern', 'Erwartete_Richtung'), J_DIR_NONE);
+        SetValueFloat(J_ID($rootID, '05_Intern', 'Bestaetigung_bis_ms'), 0.0);
+        SetValueBoolean(J_ID($rootID, '05_Intern', 'Stop_Angefordert'), false);
+        SetValueBoolean(J_ID($rootID, '05_Intern', 'Externe_Referenz_Gesetzt'), false);
+        SetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase'), J_PHASE_EXTERNAL);
+        SetValueBoolean(J_ID($rootID, '04_Istwerte', 'Automatik_Aktiv'), false);
+        SetValueInteger(J_ID($rootID, '04_Istwerte', 'Fahrstatus'), $direction);
+        J_SetWorker($rootID, true);
+        J_SetLastAction($rootID, 'Reale LCN-/GT8-Gegenrichtung hat Vorrang; Symcon-Auftrag verworfen');
+        return;
+    }
+
     // Ein nach STOP/Timeout verspaetet einlaufender Start wird sofort wieder gestoppt.
     if ($phase === J_PHASE_STOPPING && GetValueBoolean(J_ID($rootID, '05_Intern', 'Abbruch_Wartet_Auf_Start'))) {
         SetValueBoolean(J_ID($rootID, '05_Intern', 'Abbruch_Wartet_Auf_Start'), false);
         SetValueBoolean(J_ID($rootID, '05_Intern', 'Stop_Angefordert'), true);
-        SetValueFloat(J_ID($rootID, '05_Intern', 'Stop_bis_ms'), $now + J_ConfigInt($rootID, 'Stoppbestaetigung_ms'));
-        J_SetWorker($rootID, true);
-        J_SetLastAction($rootID, 'Verspaeteter Relaisstart erkannt; sofortiger STOP');
+        J_PrepareStopConfirmation($rootID);
+        J_InvalidateReference($rootID, 'Verspäteter Relaisstart nach abgelaufener Startbestätigung; Fahrbeginn zeitlich unsicher');
+        SetValueString(J_ID($rootID, '04_Istwerte', 'Fehlertext'), 'Verspäteter Relaisstart wurde erkannt und automatisch gestoppt; Referenz ist ungültig.');
+        J_SetWorker($rootID, false);
+        J_SetLastAction($rootID, 'Verspaeteter Relaisstart erkannt; STOP wartet auf Sendefreigabe');
         if (!J_SendStopForRealDirection($rootID)) {
             J_SetError($rootID, 'Verspaeteter Start konnte nicht gestoppt werden.', false);
+            return;
         }
+        if (J_RelayState($rootID) === J_DIR_NONE) {
+            J_HandleRealStop($rootID, $direction);
+            return;
+        }
+        J_ArmStopConfirmation($rootID);
+        J_SetLastAction($rootID, 'Verspaeteter Relaisstart erkannt; STOP-Telegramm angenommen, AUS-Bestätigung läuft');
         return;
     }
 
@@ -1270,6 +1467,7 @@ function J_HandleRealStart(int $rootID, int $direction, float $now): void
         SetValueBoolean(J_ID($rootID, '05_Intern', 'Stop_Angefordert'), false);
         SetValueBoolean(J_ID($rootID, '05_Intern', 'Abbruch_Wartet_Auf_Start'), false);
         SetValueBoolean(J_ID($rootID, '05_Intern', 'Abbruch_Fehlerphase'), false);
+        SetValueBoolean(J_ID($rootID, '05_Intern', 'Externe_Referenz_Gesetzt'), false);
         SetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase'), J_PHASE_EXTERNAL);
         SetValueBoolean(J_ID($rootID, '04_Istwerte', 'Automatik_Aktiv'), false);
         SetValueInteger(J_ID($rootID, '04_Istwerte', 'Fahrstatus'), $direction);
@@ -1286,15 +1484,46 @@ function J_HandleRealStart(int $rootID, int $direction, float $now): void
     SetValueInteger(J_ID($rootID, '05_Intern', 'Auftragstyp'), J_ORDER_NONE);
     SetValueInteger(J_ID($rootID, '05_Intern', 'Erwartete_Richtung'), J_DIR_NONE);
     SetValueBoolean(J_ID($rootID, '05_Intern', 'Stop_Angefordert'), false);
+    SetValueBoolean(J_ID($rootID, '05_Intern', 'Externe_Referenz_Gesetzt'), false);
     SetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase'), J_PHASE_EXTERNAL);
     SetValueBoolean(J_ID($rootID, '04_Istwerte', 'Automatik_Aktiv'), false);
     J_SetWorker($rootID, true); // Positionsfortschreibung, kein automatischer STOP.
     J_SetLastAction($rootID, 'Externe/GT8-KURZ-Fahrt erkannt; alter Automatikauftrag verworfen');
 }
 
+function J_HandleExternalReferenceDeadline(int $rootID, int $order): void
+{
+    if ($order !== J_CurrentOrder($rootID)
+        || GetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase')) !== J_PHASE_EXTERNAL
+        || GetValueBoolean(J_ID($rootID, '05_Intern', 'Externe_Referenz_Gesetzt'))) {
+        return;
+    }
+    $direction = J_RelayState($rootID);
+    if (!J_IsDirection($direction)) {
+        return;
+    }
+    $startMs = GetValueFloat(J_ID($rootID, '05_Intern', 'Startzeit_ms'));
+    $requiredMs = J_DirectionalBlindTravelMs($rootID, $direction)
+        + max(0, J_ConfigInt($rootID, 'Referenzreserve_ms'));
+    if ($startMs <= 0.0 || J_NowMs() - $startMs < $requiredMs) {
+        return;
+    }
+
+    J_SetReference(
+        $rootID,
+        $direction === J_DIR_UP ? 0.0 : 100.0,
+        $direction === J_DIR_UP ? 0.0 : 100.0,
+        'Externe LCN-/GT8-Fahrt erreichte die Endlage sicher durch vollständige Laufzeit plus Referenzreserve; kein STOP durch Symcon'
+    );
+    SetValueBoolean(J_ID($rootID, '05_Intern', 'Externe_Referenz_Gesetzt'), true);
+    J_SetLastAction($rootID, 'Externe Endlage sicher erkannt und Referenz aktualisiert; LCN-Fahrt bleibt unangetastet');
+    J_SetWorker($rootID, true);
+}
+
 function J_HandleRealStop(int $rootID, int $oldDirection): void
 {
     J_MarkRelaysOff($rootID);
+    J_PrepareStopConfirmation($rootID);
     $phase = GetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase'));
     $stopRequested = GetValueBoolean(J_ID($rootID, '05_Intern', 'Stop_Angefordert'));
 
@@ -1362,29 +1591,28 @@ function J_HandleRealStop(int $rootID, int $oldDirection): void
             J_SetReference($rootID, $targetBlind, $targetSlat, 'Endlage nach Referenzreserve und bestätigtem Relais-STOP gespeichert');
         }
 
+        if (J_HasPending($rootID)) {
+            J_StartPending($rootID);
+            return;
+        }
+
+        $tolerance = J_ConfigFloat($rootID, 'Positionstoleranz');
+        if ($hardEnd
+            && $oldDirection === J_DIR_DOWN
+            && $targetBlind >= 100.0 - $tolerance) {
+            J_StartCalibrationWindow($rootID);
+            return;
+        }
+
         J_StartConfiguredFollowSlatOrFinish($rootID);
         return;
     }
 
     if ($phase === J_PHASE_CALIBRATION) {
-        SetValueFloat(J_ID($rootID, '04_Istwerte', 'Ist_Behang'), 100.0);
-        SetValueFloat(J_ID($rootID, '04_Istwerte', 'Ist_Lamelle'), 100.0);
-        if (GetValueBoolean(J_ID($rootID, '05_Intern', 'Endlage_Hart'))) {
-            J_SetReference($rootID, 100.0, 100.0, 'Endlage ZU nach Referenzreserve und Kalibrierfenster bestätigt');
-        }
-
-        $calibrationDeadline = GetValueFloat(J_ID($rootID, '05_Intern', 'Zielzeit_ms'));
-        $calibrationComplete = $stopRequested && ($calibrationDeadline <= 0.0 || J_NowMs() + 100.0 >= $calibrationDeadline);
-        if (!$calibrationComplete) {
-            J_FinishIdle($rootID, 'Zeitverzoegerung/Kalibrierfenster vorzeitig beendet; ShakeFree nach Endlage ZU aus Sicherheitsgruenden verworfen');
-            return;
-        }
-
-        if (GetValueBoolean(J_ID($rootID, '03_Bedienung', 'ShakeFree_Aktiv'))) {
-            J_StartShakeNow($rootID);
-        } else {
-            J_StartConfiguredFollowSlatOrFinish($rootID);
-        }
+        // Das Kalibrierfenster läuft nur mit real bestätigten AUS-Relais.
+        // Eine Relaismeldung in dieser Phase ist daher keine Fortsetzung des
+        // alten Auftrags, sondern wird außerhalb dieser Routine bewertet.
+        J_FinishIdle($rootID, 'Kalibrierfenster durch Relaisstatusänderung beendet');
         return;
     }
 
@@ -1392,6 +1620,10 @@ function J_HandleRealStop(int $rootID, int $oldDirection): void
         SetValueFloat(J_ID($rootID, '04_Istwerte', 'Ist_Lamelle'), J_Clamp($targetSlat));
         $shakeRestore = GetValueBoolean(J_ID($rootID, '05_Intern', 'Shake_Nachlauf_Aktiv'));
         SetValueBoolean(J_ID($rootID, '05_Intern', 'Shake_Nachlauf_Aktiv'), false);
+        if (J_HasPending($rootID)) {
+            J_StartPending($rootID);
+            return;
+        }
         J_FinishIdle($rootID, $shakeRestore
             ? 'ShakeFree abgeschlossen; Lamellen-ZU-Befehl gestoppt und beide Relais AUS bestätigt'
             : 'Lamellenziel erreicht');
@@ -1401,6 +1633,11 @@ function J_HandleRealStop(int $rootID, int $oldDirection): void
     if ($phase === J_PHASE_SHAKE) {
         SetValueFloat(J_ID($rootID, '04_Istwerte', 'Ist_Lamelle'), 0.0);
         SetValueBoolean(J_ID($rootID, '05_Intern', 'Shake_Nachlauf_Aktiv'), true);
+        if (J_HasPending($rootID)) {
+            SetValueBoolean(J_ID($rootID, '05_Intern', 'Shake_Nachlauf_Aktiv'), false);
+            J_StartPending($rootID);
+            return;
+        }
         J_SetLastAction($rootID, 'ShakeFree-AUF gestoppt; Lamellen-ZU-Nachlauf wird überwacht');
         J_StartConfiguredFollowSlatOrFinish($rootID);
         return;
@@ -1461,15 +1698,56 @@ function J_StartShakeNow(int $rootID): void
     SetValueFloat(J_ID($rootID, '05_Intern', 'Ziel_Lamelle'), 0.0);
     SetValueBoolean(J_ID($rootID, '05_Intern', 'Stop_Angefordert'), false);
     SetValueBoolean(J_ID($rootID, '05_Intern', 'Endlage_Hart'), false);
-    SetValueFloat(J_ID($rootID, '05_Intern', 'Bestaetigung_bis_ms'), J_NowMs() + J_ConfigInt($rootID, 'Relaisbestaetigung_ms'));
-    SetValueFloat(J_ID($rootID, '05_Intern', 'Stop_bis_ms'), 0.0);
+    J_PrepareStartConfirmation($rootID);
+    J_PrepareStopConfirmation($rootID);
     SetValueFloat(J_ID($rootID, '05_Intern', 'Zielzeit_ms'), 0.0);
     SetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase'), J_PHASE_WAIT_START);
     SetValueBoolean(J_ID($rootID, '04_Istwerte', 'Automatik_Aktiv'), true);
+    J_SetWorker($rootID, false);
+    J_SetLastAction($rootID, 'ShakeFree nach Endlage ZU: AUF ' . $duration . ' ms, Auftrag ' . $order . '; wartet auf Sendefreigabe');
+    if (!J_SendDirection($rootID, J_DIR_UP, J_DIR_NONE)) {
+        return;
+    }
+    J_ArmStartConfirmation($rootID);
+    J_SetLastAction($rootID, 'ShakeFree nach Endlage ZU: AUF ' . $duration . ' ms, Auftrag ' . $order . '; LCN-Telegramm angenommen, Startbestätigung läuft');
+}
+
+function J_StartCalibrationWindow(int $rootID): void
+{
+    if (J_RelayState($rootID) !== J_DIR_NONE) {
+        J_SetError($rootID, 'Kalibrierfenster darf nur bei bestätigten AUS-Relais starten.', false);
+        return;
+    }
+
+    SetValueBoolean(J_ID($rootID, '05_Intern', 'Stop_Angefordert'), false);
+    SetValueBoolean(J_ID($rootID, '05_Intern', 'Stopstatus_Nachfrage_Aktiv'), false);
+    SetValueFloat(J_ID($rootID, '05_Intern', 'Stop_bis_ms'), 0.0);
+    SetValueFloat(
+        J_ID($rootID, '05_Intern', 'Zielzeit_ms'),
+        J_NowMs() + J_ConfigInt($rootID, 'Kalibrierfenster_ms')
+    );
+    SetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase'), J_PHASE_CALIBRATION);
+    SetValueBoolean(J_ID($rootID, '04_Istwerte', 'Automatik_Aktiv'), true);
     J_SetWorker($rootID, true);
-    J_SetLastAction($rootID, 'ShakeFree nach Endlage ZU: AUF ' . $duration . ' ms, Auftrag ' . $order);
-    if (!J_SendDirection($rootID, J_DIR_UP)) {
-        J_SetWorker($rootID, false);
+    J_SetLastAction($rootID, '100 % ZU und beide ausgewählten Relais AUS bestätigt; Kalibrierfenster gestartet');
+}
+
+function J_CompleteCalibrationWindow(int $rootID): void
+{
+    if (J_RelayState($rootID) !== J_DIR_NONE) {
+        J_ReconcileRelayState($rootID);
+        if (GetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase')) === J_PHASE_CALIBRATION) {
+            J_SetError($rootID, 'Kalibrierfenster beendet, aber mindestens ein ausgewähltes Motorrelais ist aktiv.', false);
+        }
+        return;
+    }
+
+    SetValueFloat(J_ID($rootID, '05_Intern', 'Zielzeit_ms'), 0.0);
+    J_SetWorker($rootID, false);
+    if (GetValueBoolean(J_ID($rootID, '03_Bedienung', 'ShakeFree_Aktiv'))) {
+        J_StartShakeNow($rootID);
+    } else {
+        J_StartConfiguredFollowSlatOrFinish($rootID);
     }
 }
 
@@ -1488,47 +1766,33 @@ function J_HandleDeadline(int $rootID, int $order): void
         return;
     }
 
-    J_UpdatePositionToNow($rootID);
-
-    $startDirection = GetValueInteger(J_ID($rootID, '05_Intern', 'Start_Richtung'));
-    $targetBlind = GetValueFloat(J_ID($rootID, '05_Intern', 'Ziel_Behang'));
-    $hardEnd = GetValueBoolean(J_ID($rootID, '05_Intern', 'Endlage_Hart'));
-    $tolerance = J_ConfigFloat($rootID, 'Positionstoleranz');
-
-    if (in_array($phase, [J_PHASE_BLIND, J_PHASE_REFERENCE], true)
-        && $hardEnd
-        && $startDirection === J_DIR_UP
-        && $targetBlind <= $tolerance) {
-        J_SetReference($rootID, 0.0, 0.0, 'Endlage AUF nach richtungsabhängiger Gesamtzeit plus Referenzreserve erreicht');
-    }
-
-    if (in_array($phase, [J_PHASE_BLIND, J_PHASE_REFERENCE], true)
-        && $startDirection === J_DIR_DOWN
-        && $targetBlind >= 100.0 - $tolerance) {
-        J_SetReference($rootID, 100.0, 100.0, 'Endlage ZU nach richtungsabhängiger Gesamtzeit plus Referenzreserve erreicht');
-        SetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase'), J_PHASE_CALIBRATION);
-        SetValueFloat(
-            J_ID($rootID, '05_Intern', 'Zielzeit_ms'),
-            J_NowMs() + J_ConfigInt($rootID, 'Kalibrierfenster_ms')
-        );
-        SetValueBoolean(J_ID($rootID, '04_Istwerte', 'Automatik_Aktiv'), true);
-        J_SetWorker($rootID, true);
-        J_SetLastAction($rootID, '100 % ZU erreicht; Zeitverzoegerung/Kalibrierfenster gestartet, ShakeFree nach Endlage ZU fruehestens danach');
+    if ($phase === J_PHASE_CALIBRATION) {
+        J_CompleteCalibrationWindow($rootID);
         return;
     }
 
-    SetValueBoolean(J_ID($rootID, '05_Intern', 'Stop_Angefordert'), true);
-    SetValueFloat(J_ID($rootID, '05_Intern', 'Stop_bis_ms'), J_NowMs() + J_ConfigInt($rootID, 'Stoppbestaetigung_ms'));
-    J_SetWorker($rootID, true);
-    J_SetLastAction($rootID, 'Zielzeit erreicht; STOP auf reale Richtung');
+    J_UpdatePositionToNow($rootID);
 
+    SetValueBoolean(J_ID($rootID, '05_Intern', 'Stop_Angefordert'), true);
+    J_PrepareStopConfirmation($rootID);
+    J_SetWorker($rootID, false);
+    J_SetLastAction($rootID, 'Zielzeit erreicht; STOP wartet auf Sendefreigabe');
+
+    $oldDirection = GetValueInteger(J_ID($rootID, '05_Intern', 'Start_Richtung'));
     if (J_RelayState($rootID) === J_DIR_NONE) {
-        J_HandleRealStop($rootID, GetValueInteger(J_ID($rootID, '05_Intern', 'Start_Richtung')));
+        J_HandleRealStop($rootID, $oldDirection);
         return;
     }
     if (!J_SendStopForRealDirection($rootID)) {
         J_SetError($rootID, 'Ziel-STOP konnte nicht gesendet werden.', false);
+        return;
     }
+    if (J_RelayState($rootID) === J_DIR_NONE) {
+        J_HandleRealStop($rootID, $oldDirection);
+        return;
+    }
+    J_ArmStopConfirmation($rootID);
+    J_SetLastAction($rootID, 'Zielzeit erreicht; STOP-Telegramm angenommen, AUS-Bestätigung läuft');
 }
 
 function J_HandleStartTimeout(int $rootID, int $order): void
@@ -1546,11 +1810,36 @@ function J_HandleStartTimeout(int $rootID, int $order): void
         return;
     }
 
-    SetValueString(J_ID($rootID, '04_Istwerte', 'Fehlertext'), 'Keine reale Relaisbestaetigung innerhalb der eingestellten Zeit.');
+    $statusRetryID = J_ID($rootID, '05_Intern', 'Startstatus_Nachfrage_Aktiv');
+    if (!GetValueBoolean($statusRetryID)
+        && IPS_FunctionExists('LCN_RequestStatus')) {
+        $actorModuleID = (int) J_HardwareBinding($rootID)['actorModuleID'];
+        if ($actorModuleID > 0 && J_LcnInstanceReady($actorModuleID)
+            && LCN_RequestStatus($actorModuleID)) {
+            SetValueBoolean(J_ID($rootID, '05_Intern', 'Startstatus_Relais_AUF_Empfangen'), false);
+            SetValueBoolean(J_ID($rootID, '05_Intern', 'Startstatus_Relais_AB_Empfangen'), false);
+            SetValueBoolean($statusRetryID, true);
+            SetValueFloat(
+                J_ID($rootID, '05_Intern', 'Bestaetigung_bis_ms'),
+                J_NowMs() + max(1000, J_ConfigInt($rootID, 'Relaisbestaetigung_ms'))
+            );
+            J_SetWorker($rootID, true);
+            J_SetLastAction($rootID, 'Startbestätigung verzögert; ausgewähltes Aktormodul erneut abgefragt');
+            return;
+        }
+    }
+
+    $freshUp = GetValueBoolean(J_ID($rootID, '05_Intern', 'Startstatus_Relais_AUF_Empfangen'));
+    $freshDown = GetValueBoolean(J_ID($rootID, '05_Intern', 'Startstatus_Relais_AB_Empfangen'));
+    SetValueBoolean($statusRetryID, false);
+    $message = $freshUp && $freshDown
+        ? 'LCN-Telegramm wurde angenommen, aber beide ausgewählten Motorrelais blieben nach einer frischen Statusabfrage AUS. Der Auftrag wurde sicher verworfen.'
+        : 'Keine vollständige aktuelle Relaisstatusantwort innerhalb der Startbestätigungszeit. Der Auftrag wurde sicher verworfen; die Instanz bleibt betriebsbereit.';
+    SetValueString(J_ID($rootID, '04_Istwerte', 'Fehlertext'), $message);
     J_ClearPending($rootID);
     SetValueInteger(J_ID($rootID, '05_Intern', 'Folge_Lamelle'), -1);
     SetValueInteger(J_ID($rootID, '05_Intern', 'Folge_Richtung'), J_DIR_NONE);
-    J_BeginCancelGuard($rootID, 'Starttimeout; verspaeteten Relaisstart abfangen', true);
+    J_BeginCancelGuard($rootID, 'Start nicht bestätigt; Spätstart-Schutz ohne Fehlerverriegelung', false);
 }
 
 function J_HandleStopTimeout(int $rootID, int $order): void
@@ -1568,11 +1857,86 @@ function J_HandleStopTimeout(int $rootID, int $order): void
         return;
     }
 
-    J_SetError(
-        $rootID,
-        'Keine Relais-AUS-Bestaetigung nach STOP. Keine automatische Wiederholung wegen Toggle-Gefahr. Symcon wird bis zur Quittierung deaktiviert.',
-        false
-    );
+    $statusRetryID = J_ID($rootID, '05_Intern', 'Stopstatus_Nachfrage_Aktiv');
+    $verifiedRetryID = J_ID($rootID, '05_Intern', 'Stop_Wiederholung_Gesendet');
+
+    if (GetValueBoolean($verifiedRetryID)) {
+        J_SetError(
+            $rootID,
+            'Das ausgewählte Motorrelais blieb auch nach einer frischen Statusbestätigung und genau einer verifizierten STOP-Wiederholung aktiv. Lokal ausschalten und Fehler quittieren.',
+            false
+        );
+        return;
+    }
+
+    if (!GetValueBoolean($statusRetryID)) {
+        if (IPS_FunctionExists('LCN_RequestStatus')) {
+            $actorModuleID = (int) J_HardwareBinding($rootID)['actorModuleID'];
+            if ($actorModuleID > 0 && J_LcnInstanceReady($actorModuleID)) {
+                SetValueBoolean(J_ID($rootID, '05_Intern', 'Stopstatus_Relais_AUF_Empfangen'), false);
+                SetValueBoolean(J_ID($rootID, '05_Intern', 'Stopstatus_Relais_AB_Empfangen'), false);
+                if (LCN_RequestStatus($actorModuleID)) {
+                    SetValueBoolean($statusRetryID, true);
+                    SetValueFloat(
+                        J_ID($rootID, '05_Intern', 'Stop_bis_ms'),
+                        J_NowMs() + max(1000, J_ConfigInt($rootID, 'Stoppbestaetigung_ms'))
+                    );
+                    J_SetWorker($rootID, true);
+                    J_SetLastAction($rootID, 'Relais-AUS-Bestätigung verzögert; frischen Status der ausgewählten Relais angefordert');
+                    return;
+                }
+            }
+        }
+
+        J_SetError(
+            $rootID,
+            'Keine reale AUS-Bestätigung und keine frische Statusabfrage des ausgewählten Aktormoduls möglich. Kein unbestätigtes Toggle gesendet; lokal ausschalten und Fehler quittieren.',
+            false
+        );
+        return;
+    }
+
+    $freshUp = GetValueBoolean(J_ID($rootID, '05_Intern', 'Stopstatus_Relais_AUF_Empfangen'));
+    $freshDown = GetValueBoolean(J_ID($rootID, '05_Intern', 'Stopstatus_Relais_AB_Empfangen'));
+    if (!$freshUp || !$freshDown) {
+        J_SetError(
+            $rootID,
+            'Die Statusabfrage lieferte keine vollständige frische Rückmeldung beider ausgewählter Motorrelais. Aus Sicherheitsgründen wurde kein zweites Toggle gesendet; lokal ausschalten und Ereigniszuordnung prüfen.',
+            false
+        );
+        return;
+    }
+
+    // Erst eine nach dem ersten STOP ausdrücklich angeforderte und vollständig
+    // eingetroffene Statusantwort darf eine einmalige Wiederholung freigeben.
+    // So wird ein verlorenes STOP-Telegramm behoben, ohne bei lediglich
+    // verzögerter AUS-Rückmeldung blind erneut zu toggeln.
+    $confirmedState = J_RelayState($rootID);
+    if ($confirmedState === J_DIR_NONE) {
+        J_HandleRelayUpdate($rootID);
+        return;
+    }
+    if (!J_IsDirection($confirmedState)) {
+        J_SetError($rootID, 'Frische Statusabfrage meldet AUF und AB gleichzeitig aktiv.', false);
+        return;
+    }
+
+    SetValueBoolean($statusRetryID, false);
+    SetValueBoolean($verifiedRetryID, true);
+    J_PrepareStopConfirmation($rootID, true);
+    SetValueBoolean(J_ID($rootID, '05_Intern', 'Stop_Angefordert'), true);
+    J_SetWorker($rootID, false);
+    J_SetLastAction($rootID, 'Frische Statusabfrage bestätigt Relais weiterhin EIN; einmalige verifizierte STOP-Wiederholung wartet auf Sendefreigabe');
+    if (!J_SendDirection($rootID, $confirmedState, $confirmedState)) {
+        J_SetError($rootID, 'Verifizierte STOP-Wiederholung konnte nicht gesendet werden.', false);
+        return;
+    }
+    if (J_RelayState($rootID) === J_DIR_NONE) {
+        J_HandleRealStop($rootID, $confirmedState);
+        return;
+    }
+    J_ArmStopConfirmation($rootID);
+    J_SetLastAction($rootID, 'Einmalige verifizierte STOP-Wiederholung gesendet; AUS-Bestätigung läuft');
 }
 
 function J_HandleCancelGuard(int $rootID, int $order): void
@@ -1635,6 +1999,8 @@ function J_ResetError(int $rootID): void
     SetValueBoolean(J_ID($rootID, '05_Intern', 'Stop_Angefordert'), false);
     SetValueBoolean(J_ID($rootID, '05_Intern', 'Abbruch_Wartet_Auf_Start'), false);
     SetValueBoolean(J_ID($rootID, '05_Intern', 'Abbruch_Fehlerphase'), false);
+    J_PrepareStartConfirmation($rootID);
+    J_PrepareStopConfirmation($rootID);
     SetValueBoolean(J_ID($rootID, '05_Intern', 'Endlage_Hart'), false);
     SetValueString(J_ID($rootID, '04_Istwerte', 'Fehlertext'), '');
     SetValueInteger(J_ID($rootID, '04_Istwerte', 'Fahrstatus'), J_DIR_NONE);
@@ -1653,6 +2019,7 @@ function J_FinishIdle(int $rootID, string $reason): void
         return;
     }
     J_MarkRelaysOff($rootID);
+    J_ClearPending($rootID);
     J_SetWorker($rootID, false);
     SetValueInteger(J_ID($rootID, '05_Intern', 'Auftragstyp'), J_ORDER_NONE);
     SetValueInteger(J_ID($rootID, '05_Intern', 'Erwartete_Richtung'), J_DIR_NONE);
@@ -1664,6 +2031,8 @@ function J_FinishIdle(int $rootID, string $reason): void
     SetValueBoolean(J_ID($rootID, '05_Intern', 'Endlage_Hart'), false);
     SetValueBoolean(J_ID($rootID, '05_Intern', 'Abbruch_Wartet_Auf_Start'), false);
     SetValueBoolean(J_ID($rootID, '05_Intern', 'Abbruch_Fehlerphase'), false);
+    J_PrepareStartConfirmation($rootID);
+    J_PrepareStopConfirmation($rootID);
     SetValueBoolean(J_ID($rootID, '05_Intern', 'Shake_Nachlauf_Aktiv'), false);
     SetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase'), J_PHASE_IDLE);
     SetValueBoolean(J_ID($rootID, '04_Istwerte', 'Automatik_Aktiv'), false);
@@ -1688,6 +2057,8 @@ function J_SetError(int $rootID, string $message, bool $tryStop): void
     SetValueBoolean(J_ID($rootID, '05_Intern', 'Stop_Angefordert'), false);
     SetValueBoolean(J_ID($rootID, '05_Intern', 'Abbruch_Wartet_Auf_Start'), false);
     SetValueBoolean(J_ID($rootID, '05_Intern', 'Abbruch_Fehlerphase'), false);
+    J_PrepareStartConfirmation($rootID);
+    J_PrepareStopConfirmation($rootID);
     SetValueString(J_ID($rootID, '04_Istwerte', 'Fehlertext'), $message);
     SetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase'), J_PHASE_ERROR);
     SetValueBoolean(J_ID($rootID, '04_Istwerte', 'Automatik_Aktiv'), false);
@@ -1717,6 +2088,8 @@ function J_BeginStatusSync(int $rootID, string $reason): void
     SetValueBoolean(J_ID($rootID, '05_Intern', 'Stop_Angefordert'), false);
     SetValueBoolean(J_ID($rootID, '05_Intern', 'Abbruch_Wartet_Auf_Start'), false);
     SetValueBoolean(J_ID($rootID, '05_Intern', 'Abbruch_Fehlerphase'), false);
+    J_PrepareStartConfirmation($rootID);
+    J_PrepareStopConfirmation($rootID);
     SetValueInteger(J_ID($rootID, '05_Intern', 'Auftragstyp'), J_ORDER_NONE);
     SetValueInteger(J_ID($rootID, '05_Intern', 'Erwartete_Richtung'), J_DIR_NONE);
     SetValueFloat(J_ID($rootID, '05_Intern', 'Startzeit_ms'), 0.0);
@@ -1743,11 +2116,12 @@ function J_BeginStatusSync(int $rootID, string $reason): void
             // Auch frei gewählte GT8-LANG-Ausgänge werden abgefragt. So ist
             // ihr Toggle-Basiswert nach einem Neustart korrekt synchronisiert,
             // selbst wenn Ausgang 3/4 auf einem anderen UPU liegt.
+            $binding = J_HardwareBinding($rootID);
             $statusInstances = array_values(array_unique(array_filter([
-                J_ConfigInt($rootID, 'LCN_Sendemodulinstanz_ID'),
-                J_ConfigInt($rootID, 'LCN_Aktormodulinstanz_ID'),
-                J_LcnModuleForVariable(J_ConfigInt($rootID, 'GT8_LANG_AUF_ID')),
-                J_LcnModuleForVariable(J_ConfigInt($rootID, 'GT8_LANG_AB_ID')),
+                (int) $binding['sendModuleID'],
+                (int) $binding['actorModuleID'],
+                J_LcnModuleForVariable((int) $binding['gt8LongUpVariableID']),
+                J_LcnModuleForVariable((int) $binding['gt8LongDownVariableID']),
             ], static fn (int $id): bool => $id > 0)));
             foreach ($statusInstances as $instanceID) {
                 if (!J_LcnInstanceReady($instanceID)) {
@@ -1821,6 +2195,7 @@ function J_CompleteStatusSync(int $rootID, int $order): void
     }
     if (J_IsDirection($state)) {
         J_SnapshotRealStart($rootID, $state, J_NowMs());
+        SetValueBoolean(J_ID($rootID, '05_Intern', 'Externe_Referenz_Gesetzt'), false);
         SetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase'), J_PHASE_EXTERNAL);
         SetValueBoolean(J_ID($rootID, '04_Istwerte', 'Automatik_Aktiv'), false);
         J_SetWorker($rootID, true);

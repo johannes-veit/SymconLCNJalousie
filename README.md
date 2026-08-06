@@ -57,7 +57,15 @@ Eine ausführliche Anleitung steht in [ERSTE_SCHRITTE.md](ERSTE_SCHRITTE.md).
 
 ## Entwicklungsstand
 
-**0.1.19 – öffentliche Beta.** Der Runtime-Kern basiert auf der tiefengeprüften V11.3-Skriptfassung. Das Modul automatisiert deren Aufbau und Konfiguration. Vor einem produktiven Motorbetrieb bleiben reale Tests mit Symcon 9.0, PCHK/PCK, LCN-Bus, Relais, Motor und Endlagen zwingend.
+**0.1.21 – öffentliche Beta.** Der Runtime-Kern basiert auf der tiefengeprüften V11.3-Skriptfassung. Das Modul automatisiert deren Aufbau und Konfiguration. Vor einem produktiven Motorbetrieb bleiben reale Tests mit Symcon 9.0, PCHK/PCK, LCN-Bus, Relais, Motor und Endlagen zwingend.
+
+## Relaisbestätigung und parallele Bedienung ab Version 0.1.21
+
+Die Bestätigungszeit beginnt erst, wenn Symcon das jeweilige LCN-Telegramm tatsächlich angenommen hat. Konfigurationsprüfung, Warten auf die globale Bus-Sendesperre und der einstellbare Telegrammabstand verbrauchen daher keine Bestätigungszeit mehr. Das verhindert insbesondere bei vielen gleichzeitig eingebundenen Jalousien falsche sofortige Startfehler.
+
+Bleibt die erwartete Relaismeldung aus, fragt das Modul das konfigurierte Aktormodul einmal gezielt ab. Sind beide ausgewählten Relais weiterhin AUS, wird der Auftrag ohne dauerhafte Fehlerverriegelung beendet und für verspätete Starts überwacht. Bei einem STOP ist eine Wiederholung nur zulässig, wenn beide ausgewählten Relaisvariablen nach einer frischen Statusabfrage geantwortet haben und eines davon weiterhin EIN meldet. Diese verifizierte Wiederholung erfolgt höchstens einmal.
+
+Alle Instanzen teilen eine globale LCN-Sendesperre. Zusätzlich werden doppelt verwendete Motorrelais-, GT8- und TS-KURZ-Zuordnungen erkannt. Die Software kann jedoch eine falsche LCN-PRO-Zuordnung eines ansonsten eindeutigen TS-Befehls nicht vor dem Senden physisch erkennen; deshalb bleibt die Busmonitor-Abnahme jeder AUF-/ZU-Zuordnung zwingend.
 
 ## Lizenz
 
@@ -70,7 +78,7 @@ Die direkten Statusvariablen `Position`, `Drehgrad` und `Position gültig` bleib
 
 Ab Version 0.1.15 wird eine gültige Endlagenreferenz doppelt persistent gespeichert: als sichtbare Statusvariable und zusätzlich als Modulattribut. Ein normales **Übernehmen**, ein Objektbaum-Rebuild oder eine erneute Statusabfrage löscht sie deshalb nicht mehr. Die Diagnosevariablen `Letzte Referenz-Endlage` und `Letzte Referenzierung` zeigen, wann 0 % AUF beziehungsweise 100 % ZU zuletzt sicher gesetzt wurden. Eine Referenz wird weiterhin bewusst verworfen, wenn ein Update ausdrücklich ein inkompatibles Bewegungsmodell einführt, die Symcon-Steuerung deaktiviert wird oder eine Fehlerverriegelung eintritt.
 
-Ist `Position gültig` noch `false`, wird der erste Endlagenauftrag auf 0 % oder 100 % automatisch als vollständige Referenzfahrt ausgeführt. Die Dauer ist jetzt richtungsspezifisch: Gesamtzeit 100→0 beziehungsweise 0→100 plus Referenzreserve, begrenzt durch `MaxFahrt`. Nach Ablauf der Reserve wird die entsprechende Endlage als Referenz gespeichert. Bei 100 % ZU läuft danach zusätzlich das konfigurierte Kalibrierfenster; bei 0 % AUF wird sofort der richtungsabhängige STOP ausgelöst. Lokale/externe Fahrten werden verfolgt, setzen aber ohne eindeutig überwachten Symcon-Endlagenauftrag keine neue Referenz.
+Ist `Position gültig` noch `false`, wird der erste Endlagenauftrag auf 0 % oder 100 % automatisch als vollständige Referenzfahrt ausgeführt. Die Dauer ist richtungsspezifisch: Gesamtzeit 100→0 beziehungsweise 0→100 plus Referenzreserve, begrenzt durch `MaxFahrt`. Nach Ablauf der Reserve sendet das Modul genau einmal den richtungsabhängigen STOP und wartet auf die reale AUS-Bestätigung beider ausgewählter Relais. Erst danach wird die Endlage als Referenz gespeichert. Bei 100 % ZU beginnt anschließend das konfigurierte Kalibrierfenster mit ausgeschalteten Relais. Lokale/externe Fahrten werden verfolgt, setzen aber ohne eindeutig überwachten Symcon-Endlagenauftrag keine neue Referenz.
 
 Der STOP-Taster der Kachel ist kein separater LCN-STOP-Befehl. Der Controller wertet die realen Relaisrückmeldungen aus und sendet den KURZ-Befehl der tatsächlich aktiven Richtung erneut, sodass das aktive LCN-Relais ausgeschaltet wird.
 
@@ -79,6 +87,12 @@ Der STOP-Taster der Kachel ist kein separater LCN-STOP-Befehl. Der Controller we
 ## Verhalten nach Symcon-Neustart
 
 Ab Version 0.1.19 wird eine gespeicherte, vollständige Konfiguration während des Symcon-Starts nicht mehr wegen der vorübergehend noch inaktiven LCN/PCHK-Instanzen als fehlerhaft markiert. Während `KR_INIT` prüft das Modul nur die dauerhaft gespeicherten IDs und deren strukturelle Zuordnung. Nach `IPS_KERNELSTARTED` folgt automatisch die vollständige Laufzeitprüfung. Benötigt das LCN-Sendemodul noch einige Sekunden, bleibt die Instanz mit Status 102 als konfiguriert sichtbar; die Bedienung und Ereignisse sind bis zur Freigabe trotzdem gesperrt. Der Healthcheck und Statusänderungen der beteiligten LCN-Instanzen wiederholen die Prüfung automatisch; ein erneutes Öffnen und Speichern der unveränderten Konfiguration ist nicht erforderlich. Die gespeicherten Eigenschaften und eine gültige Positionsreferenz bleiben erhalten.
+
+
+
+## Eindeutige Relais- und TS-Zuordnung ab Version 0.1.20
+
+Fahrbefehle werden nicht mehr aus kopierten Laufzeitvariablen, sondern unmittelbar aus den unveränderlichen Properties der jeweiligen Modulinstanz gebildet. Vor jedem Befehl werden das konfigurierte Sendemodul, die beiden ausgewählten Relaisvariablen und der bestätigte TS-KURZ-Befehl erneut validiert. Instanzen mit gemeinsam verwendeten Motorrelaisvariablen, GT8-Ereignisvariablen oder demselben TS-KURZ-Befehl auf demselben Sendemodul werden mit Status 213 gesperrt. Ein Befehl kann damit nicht aufgrund einer veralteten internen Kopie auf die Zuordnung einer anderen Jalousie wechseln. Die tatsächliche LCN-PRO-Programmierung des TS-Befehls muss trotzdem einmalig am Busmonitor gegen genau den gewünschten Aktor geprüft werden.
 
 ## Symcon-Themefarben
 
@@ -89,7 +103,7 @@ Die HTML-Kachel übernimmt Akzent-, Text- und Kartenfarbe direkt aus `--accent-c
 
 Ab Version 0.1.13 besitzt jede Instanz die Eigenschaft **Symcon-Steuerung aktiv**. Wird sie ausgeschaltet, deaktiviert das Modul seine Ereignisse und Timer und sendet keine LCN-Befehle; die lokale LCN-Bedienung bleibt verfügbar.
 
-Nach einer vollständig von Symcon ausgeführten ZU-Fahrt auf 100 % bleibt die ZU-Ansteuerung für die eingestellte **Zeitverzögerung / das Kalibrierfenster** (Vorgabe 30 Sekunden) unverändert aktiv. Währenddessen sendet Symcon keinen automatischen STOP und keinen Gegenbefehl. Erst nach Ablauf wird die ZU-Ansteuerung beendet. Ist **ShakeFree nach Endlage ZU** eingeschaltet, folgt die Gegenfahrt erst danach. Die Zeitverzögerung läuft auch bei ausgeschaltetem ShakeFree und gibt einer im Antrieb autonom gestarteten Endlagen-/Seilspannungsprüfung ein ungestörtes Zeitfenster.
+Nach einer vollständig von Symcon ausgeführten ZU-Fahrt auf 100 % sendet das Modul sofort genau einmal den richtungsabhängigen STOP und wartet auf die reale AUS-Bestätigung beider ausgewählter Motorrelais. Erst bei bestätigtem Stillstand beginnt die eingestellte **Zeitverzögerung / das Kalibrierfenster** (Vorgabe 30 Sekunden). Während dieses Fensters bleiben beide Relais AUS. Ist **ShakeFree nach Endlage ZU** eingeschaltet, folgt die Gegenfahrt erst nach dem ungestörten Ablauf. Ein neuer Fahrbefehl beendet das Kalibrierfenster und darf sofort sicher weiterverarbeitet werden.
 
 ## Richtungsabhängige Laufzeiten
 
@@ -104,4 +118,4 @@ Ab Version 0.1.16 kann die Sanft-Stopp-Phase vor 0 % AUF und vor 100 % ZU getren
 
 Bei einem Laufzeit- oder Aufbaufehler verriegelt sich die Instanz. Alle Modulereignisse und Timer werden deaktiviert und es werden keine weiteren LCN-Befehle gesendet. Die lokale LCN-Steuerung bleibt frei. Eine Quittierung ist erst möglich, wenn beide realen Relais AUS melden; die Quittierung selbst sendet keinen Motorbefehl und macht die Positionsreferenz vorsorglich ungültig.
 
-Jeder automatische Endlagen- und ShakeFree-Ablauf besitzt einen eindeutigen Relais-AUS-Abschluss. Nach dem 30-s-Kalibrierfenster wird ZU einmal gestoppt und das reale Ausschalten beider Relais abgewartet. Bei aktivem ShakeFree folgt danach AUF für die konfigurierte Gegenfahrzeit, erneut STOP und anschließend der Lamellen-ZU-Nachlauf. Auch dieser Nachlauf wird nach der berechneten Wendezeit gestoppt. Erst nach real bestätigtem Relais-AUS geht der Ablauf in Ruhe. Der zyklische Healthcheck (Vorgabe 10 s) dient als zweite Deadline-Sicherung, falls der 1-s-Worker ausfällt. Bleibt ein Relais trotz einmaligem STOP aktiv, verriegelt sich die Instanz; ein zweites automatisches Toggle wird bewusst nicht gesendet.
+Jeder automatische Endlagen-, ShakeFree- und Lamellenablauf besitzt einen eindeutigen Relais-AUS-Abschluss. Der aktive Richtungsbefehl wird genau einmal als KURZ-STOP gesendet; anschließend wartet das Modul auf die reale AUS-Bestätigung der beiden in dieser Instanz ausgewählten Relais. Trifft während dieser Bestätigung ein neuer oder entgegengesetzter Auftrag ein, wird er nur vorgemerkt und erst nach bestätigtem Stillstand gestartet. Derselbe Toggle-STOP wird niemals ein zweites Mal gesendet, weil er das Relais sonst wieder einschalten könnte. Bei verzögerter Rückmeldung fragt das Modul einmal den Status des ausgewählten Aktormoduls neu ab; danach verriegelt es ohne weiteren Toggle. Der zyklische Healthcheck (Vorgabe 10 s) bleibt die zweite Deadline-Sicherung.

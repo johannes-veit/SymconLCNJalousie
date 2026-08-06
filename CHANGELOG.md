@@ -1,4 +1,32 @@
+## 0.1.22
+
+- Externe LCN-Priorität, berührungslose Endlagenreferenzierung und stabilere Mischbedienung.
+
 # Changelog
+
+## 0.1.21 – 2026-08-05
+
+- Sporadische falsche Startfehler behoben: Die Frist für die reale Relaisbestätigung beginnt erst nach erfolgreicher Rückkehr von `LCN_SendCommand`, nicht mehr vor Konfigurationsprüfung, Bus-Sendesperre und tatsächlicher Telegrammübernahme.
+- Alle Jalousieinstanzen verwenden eine globale LCN-Sendesperre mit einstellbarem Mindestabstand (`CommandSpacingMs`, Standard 100 ms). Parallele Befehle werden serialisiert, statt gleichzeitig in PCHK/LCN eingespeist zu werden.
+- Startbestätigung zweistufig: Nach Ablauf der ersten Frist wird das exakt ausgewählte Aktormodul einmal abgefragt. Bleiben beide ausgewählten Relais real AUS, wird nur der Auftrag verworfen und ein Spätstart-Schutz aktiviert; die Instanz wird nicht unnötig fehlerverriegelt.
+- Startsendefehler bei real ausgeschalteten Relais werden ebenfalls ohne dauerhafte Verriegelung verworfen und durch das Spätstart-Schutzfenster abgesichert. STOP-Fehler bei aktivem Relais bleiben sicherheitskritisch.
+- Ausbleibende Relais-AUS-Bestätigung weiter abgesichert: Erst nach einer vollständig frischen Statusantwort beider ausgewählter Relais und weiterhin bestätigtem EIN-Zustand ist genau eine verifizierte STOP-Wiederholung zulässig. Ohne vollständige frische Rückmeldung wird kein blindes Toggle gesendet.
+- Falsche reale Richtung nach einem Startauftrag wird erkannt, über das tatsächlich aktive ausgewählte Relais kontrolliert gestoppt und anschließend als Zuordnungsfehler verriegelt.
+- Doppelte Relais-, GT8- und TS-KURZ-Zuordnungen bleiben gesperrt; fremde oder veraltete Relaisereignisse werden weiterhin verworfen.
+- Diagnose um Sendetimestamp, frische Start-/Stoppstatusflags, verifizierte STOP-Wiederholung und globalen Telegrammabstand erweitert.
+- Zusätzliche Regressionstests decken schnelle Gegenbefehle, mehrfaches STOP, Start ohne Rückmeldung, verspäteten Start, falsche Richtung, unvollständige Statusantwort, einmalige verifizierte STOP-Wiederholung, Kalibrierfenster-Unterbrechung, Fremdereignisse und parallele Instanzsendungen ab.
+- Sanft-Stopp-Fahrwegmodell aus 0.1.18 und Neustartvalidierung aus 0.1.19 bleiben unverändert.
+
+## 0.1.20 – 2026-08-05
+
+- Rennbedingung bei schnellem Gegenbefehl geschlossen: Ein bereits gesendeter richtungsabhängiger Toggle-STOP wird bis zur realen AUS-Bestätigung niemals erneut gesendet.
+- Folgeaufträge während der STOP-Bestätigung werden gespeichert und erst nach dem bestätigten Stillstand gestartet. Dies deckt insbesondere ZU unmittelbar nach Erreichen der oberen Endlage ab.
+- Bei ausbleibender Start- oder AUS-Rückmeldung wird das ausgewählte Aktormodul einmal gezielt per Statusabfrage aktualisiert. Danach verriegelt das Modul ohne zweiten Toggle.
+- Kalibrierfenster sicher umgestellt: Nach 100 % ZU erfolgt der STOP sofort; das 30-s-Fenster beginnt erst nach bestätigtem Relais AUS und läuft bei beiden Relais AUS. Neue Fahrbefehle können es sicher unterbrechen.
+- Sichere Hardwarebindung ergänzt: Fahrbefehle stammen direkt aus den Properties der jeweiligen Instanz; fremde oder veraltete Relaisereignisse werden verworfen.
+- Doppelte Motorrelais-, GT8- oder TS-KURZ-Zuordnungen zwischen Jalousieinstanzen werden erkannt und mit Status 213 gesperrt.
+- Diagnose um aktuelle Relaiswerte, Phasen-/Auftragszustand, erwartete Richtung, STOP-/Pending-Zustand und Statusabfrage-Wiederholungen erweitert.
+- Neustartbehandlung aus 0.1.19 und Sanft-Stopp-Fahrwegmodell aus 0.1.18 bleiben erhalten.
 
 ## 0.1.19 – 2026-08-04
 

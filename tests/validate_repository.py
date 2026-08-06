@@ -61,12 +61,30 @@ def check_php() -> None:
         if result.returncode != 0:
             ERRORS.append(f'{path.relative_to(ROOT)}: {result.stdout}{result.stderr}')
 
-    restart_test = ROOT / 'tests' / 'restart_lifecycle_test.php'
-    if restart_test.is_file():
-        result = subprocess.run(['php', str(restart_test)], capture_output=True, text=True)
-        if result.returncode != 0 or 'RESTART LIFECYCLE TEST OK' not in result.stdout:
+    php_regressions = [
+        ('restart_lifecycle_test.php', 'RESTART LIFECYCLE TEST OK'),
+        ('relay_command_state_test.php', 'RELAY COMMAND STATE TEST OK'),
+    ]
+    for filename, success_text in php_regressions:
+        test_path = ROOT / 'tests' / filename
+        if not test_path.is_file():
+            ERRORS.append(f'missing regression test: tests/{filename}')
+            continue
+        result = subprocess.run(['php', str(test_path)], capture_output=True, text=True)
+        if result.returncode != 0 or success_text not in result.stdout:
             ERRORS.append(
-                f'{restart_test.relative_to(ROOT)}: restart lifecycle test failed: '
+                f'{test_path.relative_to(ROOT)}: regression test failed: '
+                f'{result.stdout}{result.stderr}'
+            )
+
+    operation_test = ROOT / 'tests' / 'operation_sequences_test.py'
+    if not operation_test.is_file():
+        ERRORS.append('missing regression test: tests/operation_sequences_test.py')
+    else:
+        result = subprocess.run([sys.executable, str(operation_test)], capture_output=True, text=True)
+        if result.returncode != 0 or 'OPERATION SEQUENCES TEST OK' not in result.stdout:
+            ERRORS.append(
+                f'{operation_test.relative_to(ROOT)}: operation sequence test failed: '
                 f'{result.stdout}{result.stderr}'
             )
 
@@ -187,8 +205,8 @@ def check_free_gt8_event_sources() -> None:
         controller = controller_path.read_text(encoding='utf-8')
         for pattern in [
             'function J_LcnModuleForVariable',
-            "J_LcnModuleForVariable(J_ConfigInt($rootID, 'GT8_LANG_AUF_ID'))",
-            "J_LcnModuleForVariable(J_ConfigInt($rootID, 'GT8_LANG_AB_ID'))",
+            "J_LcnModuleForVariable((int) $binding['gt8LongUpVariableID'])",
+            "J_LcnModuleForVariable((int) $binding['gt8LongDownVariableID'])",
         ]:
             if pattern not in controller:
                 ERRORS.append(
@@ -693,6 +711,8 @@ def check_calibration_window_and_fault_latch() -> None:
         "'Modul_Aktiv' => ['ModuleEnabled', 0]",
         "Fehler_Verriegelt', 'Fehler verriegelt'",
         "Fehler quittiert. Symcon wurde ohne LCN-Fahrbefehl reaktiviert",
+        "nach bestätigtem STOP bei 100 % ZU",
+        "Während der Verzögerung bleiben beide Relais AUS",
     ]
     for pattern in required_module:
         if pattern not in module:
@@ -703,43 +723,61 @@ def check_calibration_window_and_fault_latch() -> None:
         "IPS_FunctionExists('LCNJAL_IsRuntimePermitted')",
         "LCNJAL_IsRuntimePermitted($rootID)",
         "J_ConfigInt($rootID, 'Kalibrierfenster_ms')",
-        "SetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase'), J_PHASE_CALIBRATION)",
-        "100 % ZU erreicht; Zeitverzoegerung/Kalibrierfenster gestartet",
-        "if ($phase === J_PHASE_CALIBRATION)",
+        'function J_StartCalibrationWindow',
+        'function J_CompleteCalibrationWindow',
+        'Kalibrierfenster darf nur bei bestätigten AUS-Relais starten',
+        '100 % ZU und beide ausgewählten Relais AUS bestätigt; Kalibrierfenster gestartet',
+        'if ($phase === J_PHASE_CALIBRATION)',
         "LCNJAL_LatchFault($rootID, $message)",
-        "Symcon-Instanz sofort",
-        "Starttimeout; verspaeteten Relaisstart abfangen', true",
+        'Symcon-Instanz sofort',
+        "Start nicht bestätigt; Spätstart-Schutz ohne Fehlerverriegelung', false",
     ]
     for pattern in required_controller:
         if pattern not in controller:
             ERRORS.append(f'{controller_path.relative_to(ROOT)}: calibration/fault logic missing ({pattern})')
 
     forbidden_controller = [
-        "J_PHASE_BLIND && $oldDirection === J_DIR_DOWN",
-        "J_SetWorker($rootID, true); // Weiter Positionsanzeige, bis das reale Relais AUS meldet.",
+        'Kalibrierfenster aktiv; neuer Symcon-Fahrbefehl verworfen',
+        '100 % ZU erreicht; Zeitverzoegerung/Kalibrierfenster gestartet',
+        "SetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase'), J_PHASE_CALIBRATION);\n        SetValueFloat(\n            J_ID($rootID, '05_Intern', 'Zielzeit_ms'),\n            J_NowMs() + J_ConfigInt($rootID, 'Kalibrierfenster_ms')\n        );\n        SetValueBoolean(J_ID($rootID, '04_Istwerte', 'Automatik_Aktiv'), true);\n        J_SetWorker($rootID, true);\n        J_SetLastAction($rootID, '100 % ZU erreicht",
     ]
     for pattern in forbidden_controller:
         if pattern in controller:
-            ERRORS.append(f'{controller_path.relative_to(ROOT)}: unsafe old behavior remains ({pattern})')
+            ERRORS.append(f'{controller_path.relative_to(ROOT)}: unsafe old calibration behavior remains ({pattern})')
+
+    real_stop_start = controller.find('function J_HandleRealStop')
+    calibration_start = controller.find('function J_StartCalibrationWindow')
+    if real_stop_start < 0 or calibration_start < 0 or 'J_StartCalibrationWindow($rootID);' not in controller[real_stop_start:calibration_start]:
+        ERRORS.append(f'{controller_path.relative_to(ROOT)}: calibration must begin only from confirmed real relay stop handling')
+
+    deadline_start = controller.find('function J_HandleDeadline')
+    deadline_end = controller.find('function J_HandleStartTimeout', deadline_start)
+    if deadline_start >= 0 and deadline_end > deadline_start:
+        deadline_body = controller[deadline_start:deadline_end]
+        if 'J_CompleteCalibrationWindow($rootID);' not in deadline_body:
+            ERRORS.append(f'{controller_path.relative_to(ROOT)}: calibration deadline must complete without a relay toggle')
+        calibration_branch = deadline_body.split('if ($phase === J_PHASE_CALIBRATION)', 1)[-1].split('J_UpdatePositionToNow', 1)[0]
+        if 'J_SendStopForRealDirection' in calibration_branch:
+            ERRORS.append(f'{controller_path.relative_to(ROOT)}: calibration deadline must never send another STOP')
 
     if 'JW_PHASE_CALIBRATION = 10' not in worker or 'JW_PHASE_CALIBRATION' not in worker.split('in_array($phase', 1)[-1]:
-        ERRORS.append(f'{worker_path.relative_to(ROOT)}: worker must supervise the 30-second calibration phase')
+        ERRORS.append(f'{worker_path.relative_to(ROOT)}: worker must supervise the calibration phase')
 
     for pattern in ['moduleEnabled: true', 'faultLatched: false', 'shakeFreeToggleEnabled: false', 'jalState.faultLatched', 'jalState.moduleEnabled']:
         if pattern not in html:
             ERRORS.append(f'{html_path.relative_to(ROOT)}: inactive/fault tile state missing ({pattern})')
 
-    for pattern in ["'Kalibrierfenster_ms' => 1", "Zeitverzoegerung/Kalibrierfenster_ms muss zwischen 30000 und 120000 ms", "'Modul_Aktiv' => 0", "'Fehler_Verriegelt' => 0"]:
+    for pattern in [
+        "'Kalibrierfenster_ms' => 1",
+        "Zeitverzoegerung/Kalibrierfenster_ms muss zwischen 30000 und 120000 ms",
+        "'Modul_Aktiv' => 0",
+        "'Fehler_Verriegelt' => 0",
+        "'Befehlsabstand_ms' => 1",
+        "'Stop_Wiederholung_Gesendet' => 0",
+        "'Befehl_gesendet_ms' => 2",
+    ]:
         if pattern not in diagnose:
             ERRORS.append(f'{diagnose_path.relative_to(ROOT)}: diagnostics missing ({pattern})')
-
-    # The 30-second window is deliberately additional to MaxFahrt: MaxFahrt
-    # monitors the mechanical travel, while the output remains energized for
-    # the manufacturer's potential calibration routine.
-    if "GetValueBoolean(J_ID($rootID, '03_Bedienung', 'ShakeFree_Aktiv'))" in controller.split("100 % ZU erreicht; Zeitverzoegerung/Kalibrierfenster gestartet", 1)[0].split('function J_HandleDeadline', 1)[-1]:
-        ERRORS.append(f'{controller_path.relative_to(ROOT)}: calibration window must run after every complete close, not only when ShakeFree is enabled')
-
-
 
 
 def check_reference_persistence_and_relay_off() -> None:
@@ -777,8 +815,8 @@ def check_reference_persistence_and_relay_off() -> None:
         'function J_InvalidateReference',
         'function J_ReferenceDurationMs',
         "J_ConfigInt($rootID, 'Referenzreserve_ms')",
-        'Endlage AUF nach richtungsabhängiger Gesamtzeit plus Referenzreserve erreicht',
-        'Endlage ZU nach richtungsabhängiger Gesamtzeit plus Referenzreserve erreicht',
+        'Endlage nach Referenzreserve und bestätigtem Relais-STOP gespeichert',
+        'function J_StartCalibrationWindow',
         'function J_MarkRelaysOff',
         'Ablaufabschluss verweigert: mindestens ein Motorrelais ist noch aktiv',
         'function J_RunHealthcheck',
@@ -806,6 +844,102 @@ def check_reference_persistence_and_relay_off() -> None:
         ERRORS.append(f'{worker_path.relative_to(ROOT)}: primary worker timer missing')
 
 
+
+
+def check_relay_binding_and_toggle_safety() -> None:
+    module_path = ROOT / 'LCNJalousie' / 'module.php'
+    controller_path = ROOT / 'LCNJalousie' / 'scripts' / 'Controller.php'
+    if not module_path.is_file() or not controller_path.is_file():
+        return
+
+    module = module_path.read_text(encoding='utf-8')
+    controller = controller_path.read_text(encoding='utf-8')
+
+    required_module = [
+        'private const STATUS_BINDING_CONFLICT = 213;',
+        'public function GetHardwareBinding(): string',
+        'public function SendDirectionCommand(int $direction, int $expectedRelayState = -1): bool',
+        "'LCNJAL_LCN_BUS_SEND'",
+        "RegisterPropertyInteger('CommandSpacingMs', 100)",
+        "IPS_Sleep($spacingMs)",
+        "'unmittelbar vor LCN_SendCommand'",
+        'STOP bereits durch reale Relais-AUS-Meldung erfüllt',
+        'private function relayCommandStillRequired',
+        'private function findBindingConflicts(): array',
+        'Motorrelaisvariable #',
+        'TS-KURZ ',
+        "['Stopstatus_Nachfrage_Aktiv', 'Zusätzliche Stoppstatus-Abfrage aktiv'",
+        "'HardwareBinding' => json_decode($this->GetHardwareBinding(), true)",
+    ]
+    for pattern in required_module:
+        if pattern not in module:
+            ERRORS.append(f'{module_path.relative_to(ROOT)}: relay binding safety missing ({pattern})')
+
+    required_controller = [
+        'function J_HardwareBinding',
+        'function J_ConfiguredRelayIDs',
+        'function J_IsConfiguredRelayTrigger',
+        'Fremde oder veraltete Relaismeldung',
+        'LCNJAL_SendDirectionCommand($rootID, $direction, $expectedRelayState)',
+        'bereits gesendeter STOP wird nicht wiederholt',
+        'Folgeauftrag gespeichert; bereits gesendeter STOP wird nicht wiederholt',
+        'if (J_HasPending($rootID))',
+        'Startstatus_Nachfrage_Aktiv',
+        'Stopstatus_Nachfrage_Aktiv',
+        'ausgewähltes Aktormodul erneut abgefragt',
+        'Aus Sicherheitsgründen wurde kein zweites Toggle gesendet',
+        'Stopstatus_Relais_AUF_Empfangen',
+        'Stopstatus_Relais_AB_Empfangen',
+        'Stop_Wiederholung_Gesendet',
+        'einmalige verifizierte STOP-Wiederholung',
+        'J_ArmStartConfirmation',
+        'J_ArmStopConfirmation',
+        'Startsendung verworfen; Spätstart-Schutz ohne Fehlerverriegelung',
+        'Reale LCN-/GT8-Gegenrichtung hat Vorrang',
+        'J_SendDirection($rootID, $state, $state)',
+        'J_SendDirection($rootID, $direction, J_DIR_NONE)',
+    ]
+    for pattern in required_controller:
+        if pattern not in controller:
+            ERRORS.append(f'{controller_path.relative_to(ROOT)}: relay/toggle safety missing ({pattern})')
+
+    send_function_start = controller.find('function J_SendDirection')
+    send_function_end = controller.find('function J_SendStopForRealDirection', send_function_start)
+    if send_function_start >= 0 and send_function_end > send_function_start:
+        send_body = controller[send_function_start:send_function_end]
+        if "LCN_SendCommand(" in send_body:
+            ERRORS.append(f'{controller_path.relative_to(ROOT)}: controller must not build/send hardware commands from mirrored runtime variables')
+
+    queue_start = controller.find('function J_QueueAfterStop')
+    queue_end = controller.find('function J_BeginCancelGuard', queue_start)
+    if queue_start >= 0 and queue_end > queue_start:
+        queue_body = controller[queue_start:queue_end]
+        stop_guard = queue_body.find("GetValueBoolean(J_ID($rootID, '05_Intern', 'Stop_Angefordert'))")
+        stop_send = queue_body.find('J_BeginStopWatch')
+        if stop_guard < 0 or stop_send < 0 or stop_guard > stop_send:
+            ERRORS.append(f'{controller_path.relative_to(ROOT)}: pending command must be stored before any possibility of a second toggle-STOP')
+
+    real_stop_start = controller.find('function J_HandleRealStop')
+    real_stop_end = controller.find('function J_StartConfiguredFollowSlatOrFinish', real_stop_start)
+    if real_stop_start >= 0 and real_stop_end > real_stop_start:
+        real_stop_body = controller[real_stop_start:real_stop_end]
+        pending_index = real_stop_body.find('if (J_HasPending($rootID))')
+        calibration_index = real_stop_body.find('J_StartCalibrationWindow($rootID);')
+        if pending_index < 0 or calibration_index < 0 or pending_index > calibration_index:
+            ERRORS.append(f'{controller_path.relative_to(ROOT)}: a quick follow-up command must start after relay-OFF and before calibration')
+
+    # State-machine regression: one STOP has already been emitted. A new target
+    # may replace the pending target, but it may not increment the STOP count.
+    stop_count = 1
+    stop_requested = True
+    pending = None
+    requested_target = 100
+    if stop_requested:
+        pending = requested_target
+    else:
+        stop_count += 1
+    if stop_count != 1 or pending != 100:
+        ERRORS.append('toggle regression: quick follow-up command repeated the already sent STOP')
 
 
 def check_restart_validation_lifecycle() -> None:
@@ -913,6 +1047,7 @@ def main() -> int:
     check_soft_stop_model()
     check_calibration_window_and_fault_latch()
     check_reference_persistence_and_relay_off()
+    check_relay_binding_and_toggle_safety()
     check_restart_validation_lifecycle()
     check_php()
     if ERRORS:

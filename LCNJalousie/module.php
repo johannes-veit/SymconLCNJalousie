@@ -5,13 +5,13 @@ declare(strict_types=1);
 /**
  * LCN Jalousie – Symcon 9.0 compatibility module.
  *
- * This module creates and maintains the V11.6 object tree, runtime scripts,
+ * This module creates and maintains the V11.7 object tree, runtime scripts,
  * events, links and configuration values below one module instance.
  * The motor interlock and local operation remain in LCN-PRO.
  */
 class LCNJalousie extends IPSModuleStrict
 {
-    private const VERSION = '0.1.19';
+    private const VERSION = '0.1.22';
     private const EXECUTE_PARENT_ACTION = '{7938A5A2-0981-5FE0-BE6C-8AA610D654EB}';
 
     private const STATUS_ACTIVE = 102;
@@ -27,6 +27,7 @@ class LCNJalousie extends IPSModuleStrict
     private const STATUS_STRUCTURE_ERROR = 210;
     private const STATUS_RELAY_CONFLICT = 211;
     private const STATUS_FAULT_LATCHED = 212;
+    private const STATUS_BINDING_CONFLICT = 213;
 
     // Symcon-Nachrichten und Runlevel. Numerisch festgehalten, damit die
     // Startlogik unabhängig von der Reihenfolge der geladenen PHP-Konstanten
@@ -35,6 +36,7 @@ class LCNJalousie extends IPSModuleStrict
     private const MESSAGE_INSTANCE_STATUS_CHANGED = 10505;
     private const KERNEL_READY = 10103;
     private const STARTUP_VALIDATION_GRACE_SECONDS = 30;
+    private const MODULE_ID = '{3057B192-E835-4916-AF1D-D89D6302DF74}';
 
     public function Create(): void
     {
@@ -75,6 +77,7 @@ class LCNJalousie extends IPSModuleStrict
         $this->RegisterPropertyInteger('WorkerWindowMs', 1500);
         $this->RegisterPropertyInteger('StatusSyncMs', 1500);
         $this->RegisterPropertyInteger('RelayCoalesceMs', 100);
+        $this->RegisterPropertyInteger('CommandSpacingMs', 100);
         $this->RegisterPropertyInteger('HealthcheckSeconds', 10);
 
         $this->RegisterPropertyFloat('PositionTolerance', 0.5);
@@ -479,14 +482,14 @@ class LCNJalousie extends IPSModuleStrict
                         ['type' => 'NumberSpinner', 'name' => 'MaxTravelMs', 'caption' => 'Maximale überwachte Fahrt', 'suffix' => ' ms', 'minimum' => 1000],
                         ['type' => 'NumberSpinner', 'name' => 'ShakeFreeMs', 'caption' => 'ShakeFree nach Endlage ZU – Gegenfahrt', 'suffix' => ' ms', 'minimum' => 100],
                         ['type' => 'NumberSpinner', 'name' => 'ShakeFreePauseMs', 'caption' => 'Umschaltpause vor ShakeFree nach Endlage ZU', 'suffix' => ' ms', 'minimum' => 0, 'maximum' => 3000],
-                        ['type' => 'NumberSpinner', 'name' => 'CalibrationWindowMs', 'caption' => 'Zeitverzögerung / Kalibrierfenster nach 100 % ZU vor STOP und ShakeFree', 'suffix' => ' ms', 'minimum' => 30000, 'maximum' => 120000],
+                        ['type' => 'NumberSpinner', 'name' => 'CalibrationWindowMs', 'caption' => 'Zeitverzögerung / Kalibrierfenster nach bestätigtem STOP bei 100 % ZU', 'suffix' => ' ms', 'minimum' => 30000, 'maximum' => 120000],
                         ['type' => 'NumberSpinner', 'name' => 'PositionTolerance', 'caption' => 'Positionstoleranz', 'suffix' => ' %', 'digits' => 1, 'minimum' => 0.1, 'maximum' => 10],
                         ['type' => 'NumberSpinner', 'name' => 'SlatTolerance', 'caption' => 'Lamellentoleranz', 'suffix' => ' %', 'digits' => 1, 'minimum' => 0.1, 'maximum' => 10],
                         ['type' => 'Label', 'caption' => 'Richtungsabhängige Positionsrechnung: Für AUF wird aus der Gesamtzeit 100→0 die volle Wendezeit abgezogen; für ZU wird die Gesamtzeit 0→100 direkt als Behanglaufzeit verwendet.'],
                         ['type' => 'Label', 'caption' => $softStopRangeCaption],
                         ['type' => 'Label', 'caption' => 'Sanft-Stopp ist positionsabhängig: Er beginnt an der aus den Laufzeiten berechneten Prozentgrenze. Ein Zwischenziel außerhalb der Endzone fährt vollständig mit voller Geschwindigkeit; ein Zwischenziel innerhalb der Endzone enthält genau den bis zu dieser Position durchfahrenen Anteil der linearen Verzögerung. 0 ms deaktiviert die jeweilige Korrektur.'],
                         ['type' => 'Label', 'caption' => 'Bewegungsmodell: 0 % → ZU ohne Vorlauf; 100 % → AUF mit voller Wendezeit; Zwischenposition gleiche Richtung mit Sanftanlauf; Gegenrichtung mit dem längeren Wert aus Sanftanlauf und Rest-Wendezeit.'],
-                        ['type' => 'Label', 'caption' => 'Die Zeitverzögerung / das Kalibrierfenster läuft nach jeder vollständig von Symcon ausgeführten Fahrt auf 100 % ZU – unabhängig davon, ob ShakeFree aktiviert ist. Währenddessen sendet Symcon keinen STOP und keinen Gegenbefehl. ShakeFree nach Endlage ZU startet – sofern aktiviert – erst nach Ablauf dieser Verzögerung.'],
+                        ['type' => 'Label', 'caption' => 'Die Zeitverzögerung / das Kalibrierfenster beginnt erst, nachdem bei 100 % ZU der richtungsabhängige STOP gesendet und beide ausgewählten Relais real als AUS bestätigt wurden. Während der Verzögerung bleiben beide Relais AUS. Ein neuer Fahrbefehl darf das Fenster sofort beenden; ShakeFree startet – sofern aktiviert – nur bei ungestörtem Ablauf danach.'],
                         ['type' => 'Label', 'caption' => 'Referenzierung: 0 % AUF und 100 % ZU werden jeweils erst nach der richtungsabhängigen Gesamtzeit plus Referenzreserve als gültige Endlage gespeichert. Die Referenz wird zusätzlich persistent als Modulattribut gesichert und bleibt bei normalem Übernehmen/Rebuild erhalten.'],
                         ['type' => 'Label', 'caption' => 'Nach ShakeFree wird die Lamelle mit dem ZU-KURZ-Befehl auf 100 % zurückgestellt. Dieser Nachlauf wird nach der berechneten Wendezeit einmal gestoppt und erst nach real bestätigtem Relais-AUS als beendet bewertet.'],
                     ],
@@ -502,11 +505,12 @@ class LCNJalousie extends IPSModuleStrict
                         ['type' => 'NumberSpinner', 'name' => 'WorkerWindowMs', 'caption' => 'Millisekunden-Schlussfenster', 'suffix' => ' ms', 'minimum' => 1000, 'maximum' => 3000],
                         ['type' => 'NumberSpinner', 'name' => 'StatusSyncMs', 'caption' => 'LCN-Statusabgleich', 'suffix' => ' ms', 'minimum' => 500, 'maximum' => 10000],
                         ['type' => 'NumberSpinner', 'name' => 'RelayCoalesceMs', 'caption' => 'Relaismeldungen zusammenfassen', 'suffix' => ' ms', 'minimum' => 0, 'maximum' => 1000],
+                        ['type' => 'NumberSpinner', 'name' => 'CommandSpacingMs', 'caption' => 'Mindestabstand zwischen LCN-Telegrammen aller Jalousieinstanzen', 'suffix' => ' ms', 'minimum' => 0, 'maximum' => 1000],
                         ['type' => 'NumberSpinner', 'name' => 'HealthcheckSeconds', 'caption' => 'Healthcheck / unabhängige STOP-Überwachung', 'suffix' => ' s', 'minimum' => 10, 'maximum' => 300],
                         ['type' => 'CheckBox', 'name' => 'RequestStatusOnStart', 'caption' => 'LCN-Status beim Initialisieren anfordern'],
                         ['type' => 'CheckBox', 'name' => 'AllowUnreferenced', 'caption' => 'Fahrt ohne vorherige Referenz erlauben'],
                         ['type' => 'CheckBox', 'name' => 'DiagnosticLog', 'caption' => 'Ausführliche Diagnose ins Symcon-Protokoll schreiben'],
-                        ['type' => 'Label', 'caption' => 'Relais-AUS-Sicherheit: Jede automatische Endlage, jedes ShakeFree-Teilstück und jeder Lamellennachlauf endet mit genau einem richtungsabhängigen KURZ-STOP und einer realen AUS-Bestätigung beider Relais. Bleibt ein Relais aktiv, wird die Instanz verriegelt; ein zweites automatisches Toggle wird wegen der Umschaltgefahr nicht gesendet.'],
+                        ['type' => 'Label', 'caption' => 'Relais-AUS-Sicherheit: Start- und Stoppfristen beginnen erst nach erfolgreich angenommenem LCN-Telegramm. Alle Jalousie-Telegramme werden global serialisiert. Ein STOP wird zunächst genau einmal gesendet; nur wenn eine danach ausdrücklich angeforderte, frische Statusrückmeldung das ausgewählte Relais weiterhin als EIN bestätigt, erfolgt genau eine verifizierte Sicherheitswiederholung. Doppelte Relais-, GT8- oder TS-Zuordnungen zwischen Jalousieinstanzen sperren die Steuerung.'],
                     ],
                 ],
             ],
@@ -533,6 +537,7 @@ class LCNJalousie extends IPSModuleStrict
                 ['code' => self::STATUS_STRUCTURE_ERROR, 'icon' => 'error', 'caption' => 'Objektbaum oder Laufzeitskripte konnten nicht aufgebaut werden'],
                 ['code' => self::STATUS_RELAY_CONFLICT, 'icon' => 'error', 'caption' => 'AUF und AB melden gleichzeitig TRUE – Motorbetrieb gesperrt'],
                 ['code' => self::STATUS_FAULT_LATCHED, 'icon' => 'error', 'caption' => 'Fehler verriegelt – Symcon inaktiv bis zur Quittierung'],
+                ['code' => self::STATUS_BINDING_CONFLICT, 'icon' => 'error', 'caption' => 'Relais-, GT8- oder TS-Zuordnung wird von mehreren Jalousieinstanzen verwendet'],
             ],
         ];
 
@@ -666,6 +671,157 @@ class LCNJalousie extends IPSModuleStrict
         }
         $this->SetValue('Referenziert', false);
         $this->SyncVisualization();
+    }
+
+    public function GetHardwareBinding(): string
+    {
+        $binding = [
+            'instanceID' => $this->InstanceID,
+            'sendModuleID' => $this->ReadPropertyInteger('LCNSendModuleID'),
+            'actorModuleID' => $this->ReadPropertyInteger('LCNActorModuleID'),
+            'relayUpVariableID' => $this->ReadPropertyInteger('RelayUpVariableID'),
+            'relayDownVariableID' => $this->ReadPropertyInteger('RelayDownVariableID'),
+            'gt8LongUpVariableID' => $this->ReadPropertyInteger('GT8LongUpVariableID'),
+            'gt8LongDownVariableID' => $this->ReadPropertyInteger('GT8LongDownVariableID'),
+            'tsShortUp' => $this->ReadPropertyString('TSShortUp'),
+            'tsShortDown' => $this->ReadPropertyString('TSShortDown'),
+        ];
+
+        return json_encode($binding, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}';
+    }
+
+    public function SendDirectionCommand(int $direction, int $expectedRelayState = -1): bool
+    {
+        if (!in_array($direction, [1, 2], true)) {
+            throw new InvalidArgumentException('Ungueltige Fahrtrichtung: ' . $direction);
+        }
+        if (!in_array($expectedRelayState, [-1, 0, 1, 2], true)) {
+            throw new InvalidArgumentException('Ungueltiger erwarteter Relaiszustand: ' . $expectedRelayState);
+        }
+        if (!$this->IsRuntimePermitted()) {
+            throw new RuntimeException('Jalousiesteuerung ist nicht freigegeben.');
+        }
+
+        $validation = $this->validateConfiguration(true, true);
+        if ($validation['status'] !== self::STATUS_ACTIVE) {
+            throw new RuntimeException('Befehl gesperrt: ' . implode(' | ', $validation['messages']));
+        }
+
+        $relayUpID = $this->ReadPropertyInteger('RelayUpVariableID');
+        $relayDownID = $this->ReadPropertyInteger('RelayDownVariableID');
+        $initialState = $this->selectedRelayState($relayUpID, $relayDownID);
+        if (!$this->relayCommandStillRequired($initialState, $expectedRelayState, $direction, 'vor Sendesperre')) {
+            $this->SendDebug('DirectionCommand', 'STOP bereits durch reale Relais-AUS-Meldung erfüllt; kein Toggle gesendet.', 0);
+            return true;
+        }
+
+        if (!IPS_FunctionExists('LCN_SendCommand')) {
+            throw new RuntimeException('LCN_SendCommand ist nicht verfügbar.');
+        }
+        $sendModuleID = $this->ReadPropertyInteger('LCNSendModuleID');
+        if (!$this->isUsableLcnModule($sendModuleID, true)) {
+            throw new RuntimeException('LCN-Sendemodul ist nicht betriebsbereit: ' . $sendModuleID);
+        }
+
+        $data = $direction === 1
+            ? $this->ReadPropertyString('TSShortUp')
+            : $this->ReadPropertyString('TSShortDown');
+        if (!$this->ReadPropertyBoolean('TSMappingConfirmed') || !$this->validateTS($data)) {
+            throw new RuntimeException('TS-Zuordnung ist nicht gültig und bestätigt.');
+        }
+
+        // Alle Jalousieinstanzen teilen denselben LCN-Bus. Eine globale
+        // Sendesperre verhindert, dass parallele Instanzen Telegramme zeitgleich
+        // in PCHK/LCN einspeisen. Die Bestätigungsfrist wird im Controller erst
+        // nach Rückkehr aus dieser Funktion gestartet.
+        $lockName = 'LCNJAL_LCN_BUS_SEND';
+        if (!IPS_SemaphoreEnter($lockName, 15000)) {
+            throw new RuntimeException('Der LCN-Bus ist durch parallele Jalousiebefehle länger als 15 Sekunden belegt.');
+        }
+        try {
+            // Nach dem Warten auf die sendemodulweite Sperre wird der Zustand
+            // erneut geprüft. Damit kann ein inzwischen eingetroffener externer
+            // oder paralleler Relaiswechsel nicht mit einem falschen Toggle
+            // beantwortet werden.
+            $lockedState = $this->selectedRelayState($relayUpID, $relayDownID);
+            if (!$this->relayCommandStillRequired($lockedState, $expectedRelayState, $direction, 'unmittelbar vor LCN_SendCommand')) {
+                $this->SendDebug('DirectionCommand', 'STOP während Sendesperre bereits durch Relais-AUS erfüllt; kein Toggle gesendet.', 0);
+                return true;
+            }
+            $ok = LCN_SendCommand($sendModuleID, 'TS', $data);
+            if ($ok) {
+                $spacingMs = max(0, min(1000, $this->ReadPropertyInteger('CommandSpacingMs')));
+                if ($spacingMs > 0) {
+                    IPS_Sleep($spacingMs);
+                }
+            }
+        } finally {
+            IPS_SemaphoreLeave($lockName);
+        }
+        if (!$ok) {
+            throw new RuntimeException('LCN_SendCommand wurde von Symcon nicht angenommen.');
+        }
+
+        $this->SendDebug(
+            'DirectionCommand',
+            sprintf(
+                'Instanz %d, Richtung %s, erwarteter Zustand %d, Sendemodul %d, TS %s, Relais AUF #%d, Relais ZU #%d',
+                $this->InstanceID,
+                $direction === 1 ? 'AUF' : 'ZU',
+                $expectedRelayState,
+                $sendModuleID,
+                $data,
+                $relayUpID,
+                $relayDownID
+            ),
+            0
+        );
+        return true;
+    }
+
+    private function selectedRelayState(int $relayUpID, int $relayDownID): int
+    {
+        $up = GetValueBoolean($relayUpID);
+        $down = GetValueBoolean($relayDownID);
+        if ($up && $down) {
+            return 3;
+        }
+        if ($up) {
+            return 1;
+        }
+        if ($down) {
+            return 2;
+        }
+        return 0;
+    }
+
+    private function relayCommandStillRequired(
+        int $actualState,
+        int $expectedState,
+        int $direction,
+        string $checkpoint
+    ): bool {
+        if ($actualState === 3) {
+            throw new RuntimeException('Befehl gesperrt (' . $checkpoint . '): Beide ausgewählten Motorrelais melden EIN.');
+        }
+
+        // Bei einem STOP kann das Relais zwischen Controllerprüfung und
+        // sendemodulweiter Sperre bereits real AUS gemeldet haben. Dann ist der
+        // gewünschte Zustand erfüllt und ein Toggle wäre gefährlich.
+        if ($expectedState === $direction && $actualState === 0) {
+            return false;
+        }
+
+        if ($expectedState >= 0 && $actualState !== $expectedState) {
+            throw new RuntimeException(
+                'Befehl gesperrt (' . $checkpoint . '): Erwarteter Relaiszustand '
+                . $expectedState . ', tatsächlich ' . $actualState . '.'
+            );
+        }
+        if (($direction === 1 && $actualState === 2) || ($direction === 2 && $actualState === 1)) {
+            throw new RuntimeException('Befehl gesperrt (' . $checkpoint . '): Das ausgewählte Gegenrichtungsrelais ist aktiv.');
+        }
+        return true;
     }
 
     public function IsRuntimePermitted(): bool
@@ -884,6 +1040,11 @@ class LCNJalousie extends IPSModuleStrict
                 'SoftStopUpMs' => $this->ReadPropertyInteger('SoftStopUpMs'),
                 'SoftStopDownMs' => $this->ReadPropertyInteger('SoftStopDownMs'),
                 'CalibrationDelayMs' => $this->ReadPropertyInteger('CalibrationWindowMs'),
+                'RelayConfirmMs' => $this->ReadPropertyInteger('RelayConfirmMs'),
+                'StopConfirmMs' => $this->ReadPropertyInteger('StopConfirmMs'),
+                'LateStartGuardMs' => $this->ReadPropertyInteger('LateStartGuardMs'),
+                'RelayCoalesceMs' => $this->ReadPropertyInteger('RelayCoalesceMs'),
+                'CommandSpacingMs' => $this->ReadPropertyInteger('CommandSpacingMs'),
                 'LCNSendModuleID' => $this->ReadPropertyInteger('LCNSendModuleID'),
                 'LCNActorModuleID' => $this->ReadPropertyInteger('LCNActorModuleID'),
                 'RelayUpVariableID' => $this->ReadPropertyInteger('RelayUpVariableID'),
@@ -893,10 +1054,54 @@ class LCNJalousie extends IPSModuleStrict
                 'GT8LongUpSourceModuleID' => $this->findConnectedLcnModuleForVariable($this->ReadPropertyInteger('GT8LongUpVariableID')),
                 'GT8LongDownSourceModuleID' => $this->findConnectedLcnModuleForVariable($this->ReadPropertyInteger('GT8LongDownVariableID')),
                 'TSMappingConfirmed' => $this->ReadPropertyBoolean('TSMappingConfirmed'),
+                'HardwareBinding' => json_decode($this->GetHardwareBinding(), true),
             ],
+            'runtime' => $this->getRuntimeDiagnostics(),
             'validation' => $validation,
         ];
         return json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    }
+
+    private function getRuntimeDiagnostics(): array
+    {
+        $stateCategoryID = @IPS_GetObjectIDByIdent('04_Istwerte', $this->InstanceID);
+        $internalCategoryID = @IPS_GetObjectIDByIdent('05_Intern', $this->InstanceID);
+        $relayUpID = $this->ReadPropertyInteger('RelayUpVariableID');
+        $relayDownID = $this->ReadPropertyInteger('RelayDownVariableID');
+
+        $read = static function (int|false $parentID, string $ident, mixed $default): mixed {
+            if ($parentID === false) {
+                return $default;
+            }
+            $id = @IPS_GetObjectIDByIdent($ident, $parentID);
+            if ($id === false || !IPS_VariableExists((int) $id)) {
+                return $default;
+            }
+            return GetValue((int) $id);
+        };
+
+        return [
+            'relayUpSelectedValue' => $relayUpID > 0 && IPS_VariableExists($relayUpID) ? GetValueBoolean($relayUpID) : null,
+            'relayDownSelectedValue' => $relayDownID > 0 && IPS_VariableExists($relayDownID) ? GetValueBoolean($relayDownID) : null,
+            'driveState' => $read($stateCategoryID, 'Fahrstatus', 0),
+            'phase' => $read($stateCategoryID, 'Phase', 0),
+            'lastAction' => $read($stateCategoryID, 'Letzte_Aktion', ''),
+            'lastStatusTimestamp' => $read($stateCategoryID, 'Letzte_Statusmeldung', 0),
+            'lastRelaysOffTimestamp' => $read($stateCategoryID, 'Letzte_Relais_AUS_Bestaetigung', 0),
+            'orderNumber' => $read($internalCategoryID, 'Auftragsnummer', 0),
+            'orderType' => $read($internalCategoryID, 'Auftragstyp', 0),
+            'expectedDirection' => $read($internalCategoryID, 'Erwartete_Richtung', 0),
+            'stopRequested' => $read($internalCategoryID, 'Stop_Angefordert', false),
+            'pendingAction' => $read($internalCategoryID, 'Pending_Aktion', 0),
+            'startStatusRetryActive' => $read($internalCategoryID, 'Startstatus_Nachfrage_Aktiv', false),
+            'stopStatusRetryActive' => $read($internalCategoryID, 'Stopstatus_Nachfrage_Aktiv', false),
+            'startStatusRelayUpFresh' => $read($internalCategoryID, 'Startstatus_Relais_AUF_Empfangen', false),
+            'startStatusRelayDownFresh' => $read($internalCategoryID, 'Startstatus_Relais_AB_Empfangen', false),
+            'stopStatusRelayUpFresh' => $read($internalCategoryID, 'Stopstatus_Relais_AUF_Empfangen', false),
+            'stopStatusRelayDownFresh' => $read($internalCategoryID, 'Stopstatus_Relais_AB_Empfangen', false),
+            'verifiedStopRetrySent' => $read($internalCategoryID, 'Stop_Wiederholung_Gesendet', false),
+            'commandSentTimestampMs' => $read($internalCategoryID, 'Befehl_gesendet_ms', 0.0),
+        ];
     }
 
     private function getVisualizationStateJson(): string
@@ -1233,6 +1438,16 @@ class LCNJalousie extends IPSModuleStrict
             }
         }
 
+        $bindingConflicts = $this->findBindingConflicts();
+        if ($bindingConflicts !== []) {
+            foreach ($bindingConflicts as $conflict) {
+                $messages[] = $conflict;
+            }
+            if ($status === self::STATUS_ACTIVE) {
+                $status = self::STATUS_BINDING_CONFLICT;
+            }
+        }
+
         $totalUp = $this->ReadPropertyInteger('TotalTravelMs');
         $totalDown = $this->ReadPropertyInteger('BlindTravelMs');
         $turn = $this->ReadPropertyInteger('TurnMs');
@@ -1242,12 +1457,54 @@ class LCNJalousie extends IPSModuleStrict
         $reserve = $this->ReadPropertyInteger('ReferenceReserveMs');
         $max = $this->ReadPropertyInteger('MaxTravelMs');
         $window = $this->ReadPropertyInteger('WorkerWindowMs');
+        $shakeMs = $this->ReadPropertyInteger('ShakeFreeMs');
         $shakePause = $this->ReadPropertyInteger('ShakeFreePauseMs');
         $calibrationWindow = $this->ReadPropertyInteger('CalibrationWindowMs');
+        $relayConfirm = $this->ReadPropertyInteger('RelayConfirmMs');
+        $stopConfirm = $this->ReadPropertyInteger('StopConfirmMs');
+        $lateStartGuard = $this->ReadPropertyInteger('LateStartGuardMs');
+        $statusSync = $this->ReadPropertyInteger('StatusSyncMs');
+        $relayCoalesce = $this->ReadPropertyInteger('RelayCoalesceMs');
+        $commandSpacing = $this->ReadPropertyInteger('CommandSpacingMs');
+        $healthcheck = $this->ReadPropertyInteger('HealthcheckSeconds');
         $blindUp = $totalUp - $turn;
         $blindDown = $totalDown;
-        if ($totalUp <= $turn || $totalDown <= 0 || $turn <= 0 || $softStart < 0 || $softStart > $turn || $blindUp <= 0 || $blindDown <= 0 || $softStopUp < 0 || $softStopUp >= $blindUp || $softStopDown < 0 || $softStopDown >= $blindDown || $max < max($totalUp, $totalDown) + $reserve || $window < 1000 || $window > 3000 || $shakePause < 0 || $shakePause > 3000 || $calibrationWindow < 30000 || $calibrationWindow > 120000) {
-            $messages[] = 'Zeitparameter sind widersprüchlich: Gesamtzeit 100→0 muss größer als die Wendezeit sein; Gesamtzeit 0→100 muss positiv sein; 0 ≤ Sanftanlauf ≤ Wendezeit; Sanft-Stopp AUF/ZU jeweils 0 bis kleiner als die zugehörige Behanglaufzeit; MaxFahrt mindestens längere Richtungs-Gesamtzeit + Reserve; Workerfenster 1000…3000 ms; ShakeFree-Umschaltpause 0…3000 ms; Zeitverzögerung/Kalibrierfenster 30000…120000 ms.';
+        if ($totalUp <= $turn
+            || $totalDown <= 0
+            || $turn <= 0
+            || $softStart < 0
+            || $softStart > $turn
+            || $blindUp <= 0
+            || $blindDown <= 0
+            || $softStopUp < 0
+            || $softStopUp >= $blindUp
+            || $softStopDown < 0
+            || $softStopDown >= $blindDown
+            || $reserve < 0
+            || $max < max($totalUp, $totalDown) + $reserve
+            || $shakeMs < 100
+            || $shakeMs > $max
+            || $window < 1000
+            || $window > 3000
+            || $shakePause < 0
+            || $shakePause > 3000
+            || $calibrationWindow < 30000
+            || $calibrationWindow > 120000
+            || $relayConfirm < 500
+            || $relayConfirm > 10000
+            || $stopConfirm < 500
+            || $stopConfirm > 10000
+            || $lateStartGuard < 500
+            || $lateStartGuard > 30000
+            || $statusSync < 500
+            || $statusSync > 10000
+            || $relayCoalesce < 0
+            || $relayCoalesce > 1000
+            || $commandSpacing < 0
+            || $commandSpacing > 1000
+            || $healthcheck < 10
+            || $healthcheck > 300) {
+            $messages[] = 'Zeitparameter sind widersprüchlich: Gesamtzeit 100→0 muss größer als die Wendezeit sein; Gesamtzeit 0→100 muss positiv sein; 0 ≤ Sanftanlauf ≤ Wendezeit; Sanft-Stopp AUF/ZU jeweils 0 bis kleiner als die zugehörige Behanglaufzeit; Referenzreserve ≥ 0; MaxFahrt mindestens längere Richtungs-Gesamtzeit + Reserve; ShakeFree 100 ms bis MaxFahrt; Workerfenster 1000…3000 ms; Start-/Stoppbestätigung 500…10000 ms; Spätstart-Schutz 500…30000 ms; Statussync 500…10000 ms; Relais-Koaleszenz und Befehlsabstand 0…1000 ms; Healthcheck 10…300 s; Kalibrierfenster 30000…120000 ms.';
             if ($status === self::STATUS_ACTIVE) {
                 $status = self::STATUS_TIMING_INVALID;
             }
@@ -1259,6 +1516,77 @@ class LCNJalousie extends IPSModuleStrict
         }
 
         return ['status' => $status, 'messages' => $messages];
+    }
+
+    private function findBindingConflicts(): array
+    {
+        if (!IPS_FunctionExists('IPS_GetInstanceListByModuleID')
+            || !IPS_FunctionExists('IPS_GetConfiguration')) {
+            return [];
+        }
+
+        $ownRelayIDs = array_values(array_filter([
+            $this->ReadPropertyInteger('RelayUpVariableID'),
+            $this->ReadPropertyInteger('RelayDownVariableID'),
+        ], static fn (int $id): bool => $id > 0));
+        $ownGt8IDs = array_values(array_filter([
+            $this->ReadPropertyInteger('GT8LongUpVariableID'),
+            $this->ReadPropertyInteger('GT8LongDownVariableID'),
+        ], static fn (int $id): bool => $id > 0));
+        $ownSendModule = $this->ReadPropertyInteger('LCNSendModuleID');
+        $ownCommands = array_values(array_filter([
+            $this->ReadPropertyString('TSShortUp'),
+            $this->ReadPropertyString('TSShortDown'),
+        ], static fn (string $value): bool => $value !== ''));
+
+        $conflicts = [];
+        foreach (IPS_GetInstanceListByModuleID(self::MODULE_ID) as $instanceID) {
+            $instanceID = (int) $instanceID;
+            if ($instanceID <= 0 || $instanceID === $this->InstanceID || !IPS_InstanceExists($instanceID)) {
+                continue;
+            }
+
+            $configuration = json_decode(IPS_GetConfiguration($instanceID), true);
+            if (!is_array($configuration)) {
+                continue;
+            }
+            $otherName = IPS_GetName($instanceID) . ' (#' . $instanceID . ')';
+            $otherRelayIDs = array_values(array_filter([
+                (int) ($configuration['RelayUpVariableID'] ?? 0),
+                (int) ($configuration['RelayDownVariableID'] ?? 0),
+            ], static fn (int $id): bool => $id > 0));
+            $sharedRelays = array_values(array_intersect($ownRelayIDs, $otherRelayIDs));
+            if ($sharedRelays !== []) {
+                $conflicts[] = 'Motorrelaisvariable #' . implode('/#', $sharedRelays)
+                    . ' wird auch von ' . $otherName . ' verwendet.';
+            }
+
+            $otherGt8IDs = array_values(array_filter([
+                (int) ($configuration['GT8LongUpVariableID'] ?? 0),
+                (int) ($configuration['GT8LongDownVariableID'] ?? 0),
+            ], static fn (int $id): bool => $id > 0));
+            $sharedGt8 = array_values(array_intersect($ownGt8IDs, $otherGt8IDs));
+            if ($sharedGt8 !== []) {
+                $conflicts[] = 'GT8-LANG-Ereignisvariable #' . implode('/#', $sharedGt8)
+                    . ' wird auch von ' . $otherName . ' verwendet.';
+            }
+
+            $otherSendModule = (int) ($configuration['LCNSendModuleID'] ?? 0);
+            if ($ownSendModule > 0 && $otherSendModule === $ownSendModule) {
+                $otherCommands = array_values(array_filter([
+                    (string) ($configuration['TSShortUp'] ?? ''),
+                    (string) ($configuration['TSShortDown'] ?? ''),
+                ], static fn (string $value): bool => $value !== ''));
+                $sharedCommands = array_values(array_unique(array_intersect($ownCommands, $otherCommands)));
+                if ($sharedCommands !== []) {
+                    $conflicts[] = 'TS-KURZ ' . implode(', ', $sharedCommands)
+                        . ' auf Sendemodul #' . $ownSendModule . ' wird auch von ' . $otherName
+                        . ' verwendet. Diese Zuordnung kann nicht eindeutig nur eine Jalousie schalten.';
+                }
+            }
+        }
+
+        return array_values(array_unique($conflicts));
     }
 
     private function isBooleanVariable(int $variableID): bool
@@ -1699,6 +2027,7 @@ class LCNJalousie extends IPSModuleStrict
             ['Statusabfrage_beim_Start', 'LCN-Status beim Start anfordern', 0, '~Switch', 250, true, true],
             ['Statussync_ms', 'Statusabgleich [ms]', 1, '', 260, 0, true],
             ['Relais_Koaleszenz_ms', 'Relais-Koaleszenz [ms]', 1, '', 270, 0, true],
+            ['Befehlsabstand_ms', 'Mindestabstand LCN-Telegramme [ms]', 1, '', 275, 100, true],
             ['Healthcheck_s', 'Healthcheck [s]', 1, '', 280, 0, true],
         ];
         foreach ($schema as $v) {
@@ -1765,6 +2094,15 @@ class LCNJalousie extends IPSModuleStrict
             ['Sync_Relais_AUF_Empfangen', 'Statussync Relais AUF empfangen', 0, '~Switch', 270, false, false],
             ['Sync_Relais_AB_Empfangen', 'Statussync Relais AB empfangen', 0, '~Switch', 280, false, false],
             ['Shake_Nachlauf_Aktiv', 'ShakeFree-Lamellen-ZU-Nachlauf aktiv', 0, '~Switch', 290, false, false],
+            ['Startstatus_Nachfrage_Aktiv', 'Zusätzliche Startstatus-Abfrage aktiv', 0, '~Switch', 300, false, false],
+            ['Stopstatus_Nachfrage_Aktiv', 'Zusätzliche Stoppstatus-Abfrage aktiv', 0, '~Switch', 310, false, false],
+            ['Startstatus_Relais_AUF_Empfangen', 'Startstatus Relais AUF frisch empfangen', 0, '~Switch', 320, false, false],
+            ['Startstatus_Relais_AB_Empfangen', 'Startstatus Relais AB frisch empfangen', 0, '~Switch', 330, false, false],
+            ['Stopstatus_Relais_AUF_Empfangen', 'Stoppstatus Relais AUF frisch empfangen', 0, '~Switch', 340, false, false],
+            ['Stopstatus_Relais_AB_Empfangen', 'Stoppstatus Relais AB frisch empfangen', 0, '~Switch', 350, false, false],
+            ['Stop_Wiederholung_Gesendet', 'Verifizierte STOP-Wiederholung gesendet', 0, '~Switch', 360, false, false],
+            ['Befehl_gesendet_ms', 'LCN-Befehl gesendet [monotone ms]', 2, '', 370, 0.0, false],
+            ['Externe_Referenz_Gesetzt', 'Externe Endlage während aktueller Fahrt referenziert', 0, '~Switch', 380, false, false],
         ];
         foreach ($schema as $v) {
             $this->variable($parentID, ...$v);
@@ -1807,6 +2145,7 @@ class LCNJalousie extends IPSModuleStrict
             'Statusabfrage_beim_Start' => ['RequestStatusOnStart', 0],
             'Statussync_ms' => ['StatusSyncMs', 1],
             'Relais_Koaleszenz_ms' => ['RelayCoalesceMs', 1],
+            'Befehlsabstand_ms' => ['CommandSpacingMs', 1],
             'Healthcheck_s' => ['HealthcheckSeconds', 1],
         ];
         foreach ($map as $ident => [$property, $type]) {
@@ -1823,10 +2162,10 @@ class LCNJalousie extends IPSModuleStrict
     private function ensureRuntimeScripts(int $scriptsCategoryID): void
     {
         $scripts = [
-            'Controller' => ['10 Controller V11.6', 20, 'Controller.php'],
-            'Worker' => ['20 Worker V11.6', 30, 'Worker.php'],
-            'Healthcheck' => ['30 Healthcheck V11.6', 40, 'Healthcheck.php'],
-            'Diagnose' => ['90 Diagnose V11.6', 90, 'Diagnose.php'],
+            'Controller' => ['10 Controller V11.7', 20, 'Controller.php'],
+            'Worker' => ['20 Worker V11.7', 30, 'Worker.php'],
+            'Healthcheck' => ['30 Healthcheck V11.7', 40, 'Healthcheck.php'],
+            'Diagnose' => ['90 Diagnose V11.7', 90, 'Diagnose.php'],
         ];
         foreach ($scripts as $ident => [$name, $position, $file]) {
             $path = __DIR__ . '/scripts/' . $file;
@@ -1898,7 +2237,17 @@ class LCNJalousie extends IPSModuleStrict
     private function setRuntimeEnabled(bool $enabled, int $scriptsCategoryID): void
     {
         $controllerID = $this->find($scriptsCategoryID, 'Controller');
-        foreach (['Evt_Relais_AUF', 'Evt_Relais_AB', 'Evt_GT8_LANG_AUF', 'Evt_GT8_LANG_AB'] as $ident) {
+        // Reale Relaisereignisse bleiben auch bei deaktivierter oder verriegelter
+        // Symcon-Automatik aktiv. So kann eine lokale LCN-/GT8-Fahrt weiterhin
+        // erkannt werden, ohne dass Symcon einen Befehl sendet. GT8-Hilfsereignisse
+        // für Lamellenautomatik bleiben dagegen an RuntimeEnabled gekoppelt.
+        foreach (['Evt_Relais_AUF', 'Evt_Relais_AB'] as $ident) {
+            $id = @IPS_GetObjectIDByIdent($ident, $controllerID);
+            if ($id !== false && IPS_EventExists((int) $id)) {
+                IPS_SetEventActive((int) $id, true);
+            }
+        }
+        foreach (['Evt_GT8_LANG_AUF', 'Evt_GT8_LANG_AB'] as $ident) {
             $id = @IPS_GetObjectIDByIdent($ident, $controllerID);
             if ($id !== false && IPS_EventExists((int) $id)) {
                 IPS_SetEventActive((int) $id, $enabled);

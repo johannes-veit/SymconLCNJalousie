@@ -1,7 +1,7 @@
 <?php
 /**
  * Jalousiesteuerung LCN / IP-Symcon 9.0
- * V11.6 - Diagnose, Kompatibilitaets- und Installationspruefung
+ * V11.7 - Diagnose, Kompatibilitaets- und Installationspruefung
  *
  * Die Diagnose prueft die formale Symcon-/LCN-Konfiguration. Sie ersetzt
  * keine reale Inbetriebnahme mit Motor, Relaisrueckmeldung und LCN-Busmonitor.
@@ -170,7 +170,8 @@ $variableSchema = [
         'Positionstoleranz' => 2, 'Lamellentoleranz' => 2,
         'Unreferenziert_erlauben' => 0, 'Diagnose_Log' => 0,
         'Statusabfrage_beim_Start' => 0, 'TS_Belegung_bestaetigt' => 0,
-        'Statussync_ms' => 1, 'Relais_Koaleszenz_ms' => 1, 'Healthcheck_s' => 1,
+        'Statussync_ms' => 1, 'Relais_Koaleszenz_ms' => 1,
+        'Befehlsabstand_ms' => 1, 'Healthcheck_s' => 1,
     ],
     '03_Bedienung' => [
         'Soll_Behang' => 1, 'Soll_Lamelle' => 1, 'ShakeFree_Aktiv' => 0,
@@ -198,6 +199,10 @@ $variableSchema = [
         'Worker_Aktiv' => 0, 'Kernel_Startzeit' => 1, 'Sync_bis_ms' => 2,
         'Sync_Relais_AUF_Empfangen' => 0, 'Sync_Relais_AB_Empfangen' => 0,
         'Shake_Nachlauf_Aktiv' => 0,
+        'Startstatus_Nachfrage_Aktiv' => 0, 'Stopstatus_Nachfrage_Aktiv' => 0,
+        'Startstatus_Relais_AUF_Empfangen' => 0, 'Startstatus_Relais_AB_Empfangen' => 0,
+        'Stopstatus_Relais_AUF_Empfangen' => 0, 'Stopstatus_Relais_AB_Empfangen' => 0,
+        'Stop_Wiederholung_Gesendet' => 0, 'Befehl_gesendet_ms' => 2,
     ],
 ];
 foreach ($variableSchema as $category => $variables) {
@@ -316,6 +321,7 @@ if ($errors === []) {
     $window = GetValueInteger((int) JD_ID($rootID, '01_Konfiguration', 'Workerfenster_ms'));
     $syncMs = GetValueInteger((int) JD_ID($rootID, '01_Konfiguration', 'Statussync_ms'));
     $coalesceMs = GetValueInteger((int) JD_ID($rootID, '01_Konfiguration', 'Relais_Koaleszenz_ms'));
+    $commandSpacingMs = GetValueInteger((int) JD_ID($rootID, '01_Konfiguration', 'Befehlsabstand_ms'));
     $healthSeconds = GetValueInteger((int) JD_ID($rootID, '01_Konfiguration', 'Healthcheck_s'));
     $moduleEnabled = GetValueBoolean((int) JD_ID($rootID, '01_Konfiguration', 'Modul_Aktiv'));
     $faultLatched = GetValueBoolean((int) JD_ID($rootID, '04_Istwerte', 'Fehler_Verriegelt'));
@@ -370,7 +376,8 @@ if ($errors === []) {
         JD_Add($errors, 'Workerfenster_ms ist zu gross. IPS_Sleep darf nur kurze Wartezeiten abdecken.');
     }
     if ($syncMs < 500 || $syncMs > 10000) { JD_Add($errors, 'Statussync_ms muss zwischen 500 und 10000 ms liegen.'); }
-    if ($coalesceMs < 0 || $coalesceMs > 500) { JD_Add($errors, 'Relais_Koaleszenz_ms muss zwischen 0 und 500 ms liegen.'); }
+    if ($coalesceMs < 0 || $coalesceMs > 1000) { JD_Add($errors, 'Relais_Koaleszenz_ms muss zwischen 0 und 1000 ms liegen.'); }
+    if ($commandSpacingMs < 0 || $commandSpacingMs > 1000) { JD_Add($errors, 'Befehlsabstand_ms muss zwischen 0 und 1000 ms liegen.'); }
     if ($healthSeconds < 10 || $healthSeconds > 300) { JD_Add($errors, 'Healthcheck_s muss zwischen 10 und 300 s liegen.'); }
 
     $controllerID = JD_ID($rootID, '06_Skripte', 'Controller');
@@ -380,8 +387,8 @@ if ($errors === []) {
     foreach (['Controller' => $controllerID, 'Worker' => $workerID, 'Healthcheck' => $healthID, 'Diagnose' => $diagnoseID] as $name => $id) {
         if ($id === false || !IPS_ScriptExists((int) $id)) {
             JD_Add($errors, $name . '-Skript fehlt oder hat falschen Objekttyp.');
-        } elseif (strpos(IPS_GetScriptContent((int) $id), 'V11.6') === false) {
-            JD_Add($warnings, $name . '-Skript enthaelt keine V11.6-Kennung. Skriptstand pruefen.');
+        } elseif (strpos(IPS_GetScriptContent((int) $id), 'V11.7') === false) {
+            JD_Add($warnings, $name . '-Skript enthaelt keine V11.7-Kennung. Skriptstand pruefen.');
         }
     }
 
@@ -457,7 +464,7 @@ if ($errors === []) {
         $controllerContent = IPS_GetScriptContent((int) $controllerID);
         foreach ([
             'hrtime(true)' => 'monotone Zeitmessung',
-            "IPS_FunctionExists('LCN_SendCommand')" => 'LCN-Funktionspruefung',
+            "IPS_FunctionExists('LCNJAL_SendDirectionCommand')" => 'sichere richtungsgebundene Befehlsfunktion',
             'Sync_Relais_AUF_Empfangen' => 'laufbezogene AUF-Rueckmeldung',
             'Sync_Relais_AB_Empfangen' => 'laufbezogene AB-Rueckmeldung',
             "case 'SYNC_COMPLETE':" => 'Statussync-Abschluss',
@@ -467,9 +474,15 @@ if ($errors === []) {
             'function J_RunHealthcheck' => 'unabhängige Deadline- und STOP-Überwachung',
             'Ablaufabschluss verweigert' => 'Relais-AUS-Prüfung vor dem Stillstand',
             'Shake_Nachlauf_Aktiv' => 'überwachter Lamellen-ZU-Nachlauf nach ShakeFree',
+            'function J_HardwareBinding' => 'unveränderliche Hardwarebindung aus Modul-Properties',
+            'function J_IsConfiguredRelayTrigger' => 'Filter gegen fremde oder veraltete Relaisereignisse',
+            'bereits gesendeter STOP wird nicht wiederholt' => 'Schutz gegen doppelten Toggle-STOP',
+            'function J_StartCalibrationWindow' => 'Kalibrierfenster erst nach bestätigtem Relais-AUS',
+            'Startstatus_Nachfrage_Aktiv' => 'einmalige Startstatus-Nachfrage',
+            'Stopstatus_Nachfrage_Aktiv' => 'einmalige Stoppstatus-Nachfrage',
         ] as $needle => $description) {
             if (strpos($controllerContent, $needle) === false) {
-                JD_Add($errors, 'Controller enthaelt nicht die erwartete V11.6-Sicherheitsfunktion: ' . $description . '.');
+                JD_Add($errors, 'Controller enthaelt nicht die erwartete V11.7-Sicherheitsfunktion: ' . $description . '.');
             }
         }
     }
@@ -496,7 +509,7 @@ if ($errors === []) {
 }
 
 $out = [];
-$out[] = 'DIAGNOSE JALOUSIE V11.6 - SYMCON 9.0 / PHP 8.5';
+$out[] = 'DIAGNOSE JALOUSIE V11.7 - SYMCON 9.0 / PHP 8.5';
 $out[] = 'Objekt: ' . IPS_GetLocation($rootID) . ' (ID ' . $rootID . ')';
 $out[] = str_repeat('=', 84);
 $out[] = '';
