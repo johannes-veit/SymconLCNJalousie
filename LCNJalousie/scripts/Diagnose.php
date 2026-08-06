@@ -203,6 +203,9 @@ $variableSchema = [
         'Startstatus_Relais_AUF_Empfangen' => 0, 'Startstatus_Relais_AB_Empfangen' => 0,
         'Stopstatus_Relais_AUF_Empfangen' => 0, 'Stopstatus_Relais_AB_Empfangen' => 0,
         'Stop_Wiederholung_Gesendet' => 0, 'Befehl_gesendet_ms' => 2,
+        'Externe_Referenz_Gesetzt' => 0, 'Externe_Endlage_bis_ms' => 2,
+        'Externer_Autostopp_bis_ms' => 2, 'Externer_Autostopp_Aktiv' => 0,
+        'Fremdbefehl_Quelle' => 1, 'Fremdbefehl_Erkannt_ms' => 2,
     ],
 ];
 foreach ($variableSchema as $category => $variables) {

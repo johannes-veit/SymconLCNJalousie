@@ -77,12 +77,14 @@ try {
         }
     } elseif ($phase === JW_PHASE_EXTERNAL && ($state === 1 || $state === 2)) {
         $externalReferenced = GetValueBoolean(JW_ID($rootID, '05_Intern', 'Externe_Referenz_Gesetzt'));
-        $startMs = GetValueFloat(JW_ID($rootID, '05_Intern', 'Startzeit_ms'));
-        $turnMs = (float) GetValueInteger(JW_ID($rootID, '01_Konfiguration', 'Wendezeit_ms'));
-        $requiredMs = JW_DirectionalBlindTravelMs($rootID, $state, $turnMs)
-            + max(0, GetValueInteger(JW_ID($rootID, '01_Konfiguration', 'Referenzreserve_ms')));
-        if (!$externalReferenced && $startMs > 0.0 && $now - $startMs >= $requiredMs) {
+        $endDeadline = GetValueFloat(JW_ID($rootID, '05_Intern', 'Externe_Endlage_bis_ms'));
+        $autoStopDeadline = GetValueFloat(JW_ID($rootID, '05_Intern', 'Externer_Autostopp_bis_ms'));
+        $autoStopActive = GetValueBoolean(JW_ID($rootID, '05_Intern', 'Externer_Autostopp_Aktiv'));
+
+        if (!$externalReferenced && $endDeadline > 0.0 && $now >= $endDeadline) {
             $action = 'EXTERNAL_REFERENCE';
+        } elseif ($externalReferenced && $autoStopActive && $autoStopDeadline > 0.0 && $now >= $autoStopDeadline) {
+            $action = 'EXTERNAL_STOP';
         }
     } elseif (in_array($phase, [JW_PHASE_BLIND, JW_PHASE_SLAT, JW_PHASE_SHAKE, JW_PHASE_REFERENCE, JW_PHASE_CALIBRATION], true)) {
         $deadline = GetValueFloat(JW_ID($rootID, '05_Intern', 'Zielzeit_ms'));

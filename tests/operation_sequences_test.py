@@ -186,17 +186,155 @@ m.verified_stop_timeout(True, False, True)
 assert m.stop_sent == 1 and m.latched
 
 
-# V0.1.22: externe LCN-Fahrt hat Vorrang und darf nie automatisch gestoppt werden.
+# 17-20: V0.1.23 keeps a valid reference during normal movement and observes
+# external LCN/GT8 movement until a safe endpoint. Only after the configurable
+# calibration window is the still-active selected relay toggled off.
+start_blind = function_body(CONTROLLER, 'J_StartBlindNow', 'J_RequestSlat')
+if 'J_InvalidateReference' in start_blind:
+    raise AssertionError('normal blind start must not invalidate a valid reference')
 for required in [
-    "reale LCN-/GT8-Fahrt hat Vorrang",
-    "EXTERNAL_REFERENCE",
-    "kein STOP durch Symcon",
-    "Externe_Referenz_Gesetzt",
+    'Eine bereits gültige Referenz bleibt während der Fahrt gültig',
+    'Externe_Endlage_bis_ms',
+    'Externer_Autostopp_bis_ms',
+    'Externer_Autostopp_Aktiv',
+    "J_SetReference(",
+    "J_SendExternalEndStop($rootID, $state)",
+    "J_ArmStopConfirmation($rootID)",
 ]:
-    if required not in CONTROLLER and required not in WORKER:
-        raise AssertionError(f'external-priority safety missing: {required}')
+    if required not in CONTROLLER:
+        raise AssertionError(f'external endpoint/autostop logic missing: {required}')
+for required in [
+    "'EXTERNAL_REFERENCE'",
+    "'EXTERNAL_STOP'",
+    "Externe_Endlage_bis_ms",
+    "Externer_Autostopp_bis_ms",
+]:
+    if required not in WORKER:
+        raise AssertionError(f'external worker deadline missing: {required}')
 
-external_worker_block = WORKER.split("$phase === JW_PHASE_EXTERNAL", 1)[1].split("} elseif", 1)[0]
-if "STOP_TIMEOUT" in external_worker_block or "DEADLINE" in external_worker_block:
-    raise AssertionError('external phase must not trigger an automatic stop/deadline')
-print('OPERATION SEQUENCES TEST OK (16 code invariants, 3 transition regressions)')
+external_reference = function_body(CONTROLLER, 'J_HandleExternalReferenceDeadline', 'J_HandleExternalEndStop')
+assert_order(external_reference, 'J_SetReference(', 'Externer_Autostopp_bis_ms', 'reference before calibration deadline')
+external_stop = function_body(CONTROLLER, 'J_HandleExternalEndStop', 'J_SendExternalEndStop')
+assert_order(external_stop, "J_NowMs() < $deadline", 'J_SendExternalEndStop($rootID, $state)', 'calibration before external STOP')
+
+# 21-24: Every unconfirmed toggle command owns a cross-instance lease. The
+# lease is cleared by the real start/stop feedback, so already confirmed motors
+# may continue moving while the next instance starts.
+for required in [
+    'CommandLeaseActive',
+    'waitForOtherCommandLease(15000)',
+    'markCommandLeaseState($direction, $expectedRelayState)',
+    'clearCommandLeaseState()',
+    'ForeignRelayResponse',
+    'startedMs > $nowMs + 1000.0',
+]:
+    if required not in MODULE:
+        raise AssertionError(f'command transaction isolation missing: {required}')
+assert_order(send_command, 'waitForOtherCommandLease(15000)', 'LCN_SendCommand($sendModuleID', 'lease wait before telegram')
+assert_order(real_start, 'J_ClearCommandLease($rootID);', 'SetValueFloat(J_ID($rootID, \'05_Intern\', \'Zielzeit_ms\')', 'lease release after real start')
+if 'J_ClearCommandLease($rootID);' not in real_stop:
+    raise AssertionError('real relay-off confirmation must clear command lease')
+
+# 25-27: A relay response in another instance is correlated with the single
+# active start lease. The sender is faulted with an explicit TS-routing message,
+# while the receiver remains under external/end-stop supervision.
+for required in [
+    'J_ReportPossibleForeignCommand',
+    'LCNJAL_ReportForeignRelayResponse',
+    'TS-Routing stimmt nicht mit der Instanzzuordnung überein',
+    'Routing wird beim Sender geprüft',
+]:
+    if required not in CONTROLLER:
+        raise AssertionError(f'cross-instance routing detection missing: {required}')
+
+# 28-29: Worker and healthcheck independently execute both external deadlines.
+healthcheck = function_body(CONTROLLER, 'J_RunHealthcheck', 'J_StatusText')
+for required in [
+    'J_HandleExternalReferenceDeadline($rootID, $order)',
+    'J_HandleExternalEndStop($rootID, $order)',
+]:
+    if required not in healthcheck:
+        raise AssertionError(f'external healthcheck fallback missing: {required}')
+
+# 30-31: Fault latching, runtime disable and error acknowledgement do not erase
+# a still-valid persistent reference. Only explicit uncertainty paths may call
+# InvalidateReference.
+apply_changes = function_body(MODULE, 'ApplyChanges', 'MessageSink')
+if 'invalidateReferenceWithoutCommand' in apply_changes:
+    raise AssertionError('ApplyChanges/runtime disable must preserve a valid reference')
+latch_fault = function_body(MODULE, 'LatchFault', 'StoreReference')
+if 'InvalidateReference' in latch_fault or 'invalidateReferenceWithoutCommand' in latch_fault:
+    raise AssertionError('generic fault latch must not erase reference')
+reset_error = function_body(CONTROLLER, 'J_ResetError', 'J_FinishIdle')
+if 'J_InvalidateReference' in reset_error:
+    raise AssertionError('fault acknowledgement must not erase reference')
+restore_reference = function_body(MODULE, 'restorePersistentReference', 'persistReferenceInvalid')
+for required in [
+    'nicht die aktuelle Zwischenposition',
+    'false',
+    "GetValueFloat((int) $positionID)",
+    "GetValueFloat((int) $slatID)",
+]:
+    if required not in restore_reference:
+        raise AssertionError(f'current position preservation missing: {required}')
+
+
+@dataclass
+class LeaseModel:
+    active_owner: str | None = None
+    moving: set[str] | None = None
+
+    def __post_init__(self) -> None:
+        if self.moving is None:
+            self.moving = set()
+
+    def request_start(self, name: str) -> bool:
+        if self.active_owner is not None:
+            return False
+        self.active_owner = name
+        return True
+
+    def confirm_start(self, name: str) -> None:
+        assert self.active_owner == name
+        self.active_owner = None
+        self.moving.add(name)
+
+
+# Two instances cannot have overlapping unconfirmed toggles, but after the
+# first real relay confirmation both physical motors may run concurrently.
+leases = LeaseModel()
+assert leases.request_start('Wohnen')
+assert not leases.request_start('Buero')
+leases.confirm_start('Wohnen')
+assert leases.request_start('Buero')
+leases.confirm_start('Buero')
+assert leases.moving == {'Wohnen', 'Buero'}
+
+
+@dataclass
+class ExternalModel:
+    referenced: bool = False
+    relay_on: bool = True
+    stop_sent: int = 0
+
+    def endpoint(self) -> None:
+        self.referenced = True
+
+    def calibration_expired(self) -> None:
+        if self.referenced and self.relay_on:
+            self.stop_sent += 1
+
+    def relay_off(self) -> None:
+        self.relay_on = False
+
+
+external = ExternalModel()
+external.endpoint()
+assert external.referenced and external.relay_on and external.stop_sent == 0
+external.calibration_expired()
+assert external.stop_sent == 1
+external.relay_off()
+external.calibration_expired()
+assert external.stop_sent == 1
+
+print('OPERATION SEQUENCES TEST OK (35 code invariants, 5 transition regressions)')

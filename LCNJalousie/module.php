@@ -11,7 +11,7 @@ declare(strict_types=1);
  */
 class LCNJalousie extends IPSModuleStrict
 {
-    private const VERSION = '0.1.22';
+    private const VERSION = '0.1.23';
     private const EXECUTE_PARENT_ACTION = '{7938A5A2-0981-5FE0-BE6C-8AA610D654EB}';
 
     private const STATUS_ACTIVE = 102;
@@ -97,6 +97,11 @@ class LCNJalousie extends IPSModuleStrict
         $this->RegisterAttributeFloat('ReferenceSlat', 0.0);
         $this->RegisterAttributeInteger('ReferenceTimestamp', 0);
         $this->RegisterAttributeString('ReferenceReason', '');
+        $this->RegisterAttributeBoolean('CommandLeaseActive', false);
+        $this->RegisterAttributeInteger('CommandLeaseDirection', 0);
+        $this->RegisterAttributeInteger('CommandLeaseExpectedState', -1);
+        $this->RegisterAttributeString('CommandLeaseStartedMs', '0');
+        $this->RegisterAttributeString('ForeignRelayResponse', '');
     }
 
     public function ApplyChanges(): void
@@ -107,6 +112,12 @@ class LCNJalousie extends IPSModuleStrict
         // nicht erneut. Deshalb wird der Visualisierungstyp hier ebenfalls
         // gesetzt, damit die HTML-Kachel zuverlässig aktiviert wird.
         $this->SetVisualizationType(1);
+
+        // Eine nicht bestätigte Toggle-Transaktion darf weder einen Neustart
+        // noch ein erneutes ApplyChanges überleben. Die reale Relaislage wird
+        // anschließend ausschließlich über den Statusabgleich neu bewertet.
+        $this->clearCommandLeaseState();
+        $this->WriteAttributeString('ForeignRelayResponse', '');
 
         try {
             $this->registerRuntimeMessages();
@@ -198,13 +209,10 @@ class LCNJalousie extends IPSModuleStrict
                 }
             }
 
-            if ($kernelReady
-                && $wasRuntimeEnabled
-                && !$runtimeEnabled
-                && !$startupWaiting
-                && !$runtimeDependencyUnavailable) {
-                $this->invalidateReferenceWithoutCommand($ids['state'], 'Symcon-Steuerung deaktiviert; lokale LCN-Bedienung bleibt frei');
-            }
+            // Eine vorübergehend oder manuell deaktivierte Symcon-Automatik
+            // verändert die zuletzt sicher gespeicherte Positionsreferenz nicht.
+            // Nur ein tatsächlich positionsunsicherer Bewegungsablauf darf sie
+            // ausdrücklich über InvalidateReference() verwerfen.
 
             if ($kernelReady && $runtimeEnabled && !$wasRuntimeEnabled) {
                 $controllerID = @IPS_GetObjectIDByIdent('Controller', $ids['scripts']);
@@ -238,6 +246,8 @@ class LCNJalousie extends IPSModuleStrict
     public function MessageSink(int $TimeStamp, int $SenderID, int $Message, array $Data): void
     {
         if ($Message === self::MESSAGE_KERNEL_STARTED) {
+            $this->clearCommandLeaseState();
+            $this->WriteAttributeString('ForeignRelayResponse', '');
             $this->SetBuffer(
                 'StartupValidationDeadline',
                 (string) (time() + self::STARTUP_VALIDATION_GRACE_SECONDS)
@@ -438,7 +448,7 @@ class LCNJalousie extends IPSModuleStrict
                     'expanded' => true,
                     'items' => [
                         ['type' => 'ValidationTextBox', 'name' => 'ProjectName', 'caption' => 'Name der Jalousie'],
-                        ['type' => 'CheckBox', 'name' => 'ModuleEnabled', 'caption' => 'Symcon-Steuerung aktiv (AUS = keine Befehle/Ereignisse; lokale LCN-Bedienung bleibt frei)'],
+                        ['type' => 'CheckBox', 'name' => 'ModuleEnabled', 'caption' => 'Symcon-Steuerung aktiv (AUS = keine Symcon-Telegramme; reale Relais werden nur beobachtet, lokale LCN-Bedienung bleibt frei)'],
                         ['type' => 'CheckBox', 'name' => 'ShowTechnicalObjects', 'caption' => 'Technische Unterkategorien und Skripte im Objektbaum anzeigen'],
                     ],
                 ],
@@ -569,11 +579,9 @@ class LCNJalousie extends IPSModuleStrict
         $this->WriteAttributeString('FaultMessage', '');
         $this->setFaultStateVariable(false);
 
-        $stateCategoryID = @IPS_GetObjectIDByIdent('04_Istwerte', $this->InstanceID);
-        if ($stateCategoryID !== false) {
-            $this->invalidateReferenceWithoutCommand((int) $stateCategoryID, 'Fehler quittiert; erneute Referenzfahrt erforderlich');
-        }
-
+        // Eine Fehlerquittierung allein verändert die gespeicherte Referenz
+        // nicht. Nur ein ausdrücklich als positionsunsicher erkannter Ablauf
+        // darf die Referenz zuvor ungültig gemacht haben.
         $validation = $this->validateConfiguration();
         $runtimeEnabled = $this->ReadPropertyBoolean('ModuleEnabled')
             && $validation['status'] === self::STATUS_ACTIVE;
@@ -594,10 +602,14 @@ class LCNJalousie extends IPSModuleStrict
         }
 
         $this->SetStatus(self::STATUS_ACTIVE);
-        $this->SetSummary('bereit · Referenz erforderlich');
+        $this->SetSummary($this->ReadAttributeBoolean('ReferenceValid')
+            ? 'bereit · Position gültig'
+            : 'bereit · Referenz erforderlich');
         IPS_RunScriptWaitEx((int) $controllerID, ['ACTION' => 'INITIALIZE']);
         $this->SyncVisualization();
-        return 'Fehler quittiert. Symcon wurde ohne LCN-Fahrbefehl reaktiviert; eine neue Referenzfahrt ist erforderlich.';
+        return $this->ReadAttributeBoolean('ReferenceValid')
+            ? 'Fehler quittiert. Symcon wurde ohne LCN-Fahrbefehl reaktiviert; die gültige Referenz blieb erhalten.'
+            : 'Fehler quittiert. Symcon wurde ohne LCN-Fahrbefehl reaktiviert; die Referenz war bereits ungültig.';
     }
 
     public function LatchFault(string $message): void
@@ -608,10 +620,9 @@ class LCNJalousie extends IPSModuleStrict
         $this->WriteAttributeBoolean('RuntimeEnabled', false);
         $this->setFaultStateVariable(true);
 
-        $stateCategoryID = @IPS_GetObjectIDByIdent('04_Istwerte', $this->InstanceID);
-        if ($stateCategoryID !== false) {
-            $this->invalidateReferenceWithoutCommand((int) $stateCategoryID, 'FEHLER VERRIEGELT: ' . $message);
-        }
+        // Fehlerverriegelung und Positionsreferenz sind getrennte Zustände.
+        // Die Referenz bleibt erhalten, sofern der Controller nicht ausdrücklich
+        // einen positionsunsicheren Fahrverlauf erkannt hat.
         $controlCategoryID = @IPS_GetObjectIDByIdent('03_Bedienung', $this->InstanceID);
         if ($controlCategoryID !== false) {
             $shakeID = @IPS_GetObjectIDByIdent('ShakeFree_Aktiv', (int) $controlCategoryID);
@@ -690,7 +701,72 @@ class LCNJalousie extends IPSModuleStrict
         return json_encode($binding, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}';
     }
 
+    public function GetCommandLease(): string
+    {
+        $active = $this->ReadAttributeBoolean('CommandLeaseActive');
+        $startedMs = (float) $this->ReadAttributeString('CommandLeaseStartedMs');
+        $nowMs = $this->monotonicMs();
+        if ($active && ($startedMs <= 0.0
+            || $startedMs > $nowMs + 1000.0
+            || $nowMs - $startedMs > 30000.0)) {
+            // hrtime() startet nach einem Kernel-/Systemneustart neu. Ein aus
+            // dem alten Lauf persistierter Zeitwert liegt dann in der Zukunft
+            // und muss ebenso wie eine überalterte Transaktion verworfen werden.
+            $this->clearCommandLeaseState();
+            $active = false;
+            $startedMs = 0.0;
+        }
+
+        return json_encode([
+            'active' => $active,
+            'instanceID' => $this->InstanceID,
+            'instanceName' => IPS_GetName($this->InstanceID),
+            'direction' => $this->ReadAttributeInteger('CommandLeaseDirection'),
+            'expectedRelayState' => $this->ReadAttributeInteger('CommandLeaseExpectedState'),
+            'startedMs' => $startedMs,
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}';
+    }
+
+    public function ClearCommandLease(): void
+    {
+        $this->clearCommandLeaseState();
+    }
+
+    public function ReportForeignRelayResponse(int $receiverInstanceID, int $direction): void
+    {
+        if ($receiverInstanceID <= 0 || !in_array($direction, [1, 2], true)) {
+            return;
+        }
+        $this->WriteAttributeString('ForeignRelayResponse', json_encode([
+            'receiverInstanceID' => $receiverInstanceID,
+            'receiverName' => IPS_InstanceExists($receiverInstanceID) ? IPS_GetName($receiverInstanceID) : '',
+            'direction' => $direction,
+            'reportedMs' => $this->monotonicMs(),
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '');
+    }
+
+    public function GetForeignRelayResponse(): string
+    {
+        return $this->ReadAttributeString('ForeignRelayResponse');
+    }
+
+    public function SendExternalEndStop(int $direction): bool
+    {
+        if (!in_array($direction, [1, 2], true)) {
+            throw new InvalidArgumentException('Ungueltige externe STOP-Richtung: ' . $direction);
+        }
+        if (!$this->ReadPropertyBoolean('ModuleEnabled')) {
+            throw new RuntimeException('Automatischer externer Endlagen-STOP ist bei deaktiviertem Modul gesperrt.');
+        }
+        return $this->sendDirectionCommandInternal($direction, $direction, true);
+    }
+
     public function SendDirectionCommand(int $direction, int $expectedRelayState = -1): bool
+    {
+        return $this->sendDirectionCommandInternal($direction, $expectedRelayState, false);
+    }
+
+    private function sendDirectionCommandInternal(int $direction, int $expectedRelayState, bool $allowFaultLatchedExternalStop): bool
     {
         if (!in_array($direction, [1, 2], true)) {
             throw new InvalidArgumentException('Ungueltige Fahrtrichtung: ' . $direction);
@@ -698,8 +774,11 @@ class LCNJalousie extends IPSModuleStrict
         if (!in_array($expectedRelayState, [-1, 0, 1, 2], true)) {
             throw new InvalidArgumentException('Ungueltiger erwarteter Relaiszustand: ' . $expectedRelayState);
         }
-        if (!$this->IsRuntimePermitted()) {
+        if (!$allowFaultLatchedExternalStop && !$this->IsRuntimePermitted()) {
             throw new RuntimeException('Jalousiesteuerung ist nicht freigegeben.');
+        }
+        if ($allowFaultLatchedExternalStop && !$this->ReadPropertyBoolean('ModuleEnabled')) {
+            throw new RuntimeException('Jalousiesteuerung ist deaktiviert.');
         }
 
         $validation = $this->validateConfiguration(true, true);
@@ -711,6 +790,7 @@ class LCNJalousie extends IPSModuleStrict
         $relayDownID = $this->ReadPropertyInteger('RelayDownVariableID');
         $initialState = $this->selectedRelayState($relayUpID, $relayDownID);
         if (!$this->relayCommandStillRequired($initialState, $expectedRelayState, $direction, 'vor Sendesperre')) {
+            $this->clearCommandLeaseState();
             $this->SendDebug('DirectionCommand', 'STOP bereits durch reale Relais-AUS-Meldung erfüllt; kein Toggle gesendet.', 0);
             return true;
         }
@@ -730,29 +810,43 @@ class LCNJalousie extends IPSModuleStrict
             throw new RuntimeException('TS-Zuordnung ist nicht gültig und bestätigt.');
         }
 
-        // Alle Jalousieinstanzen teilen denselben LCN-Bus. Eine globale
-        // Sendesperre verhindert, dass parallele Instanzen Telegramme zeitgleich
-        // in PCHK/LCN einspeisen. Die Bestätigungsfrist wird im Controller erst
-        // nach Rückkehr aus dieser Funktion gestartet.
+        // Nur noch nicht bestätigte Toggle-Transaktionen werden serialisiert.
+        // Nach realer Startbestätigung dürfen mehrere Jalousien parallel fahren.
         $lockName = 'LCNJAL_LCN_BUS_SEND';
-        if (!IPS_SemaphoreEnter($lockName, 15000)) {
-            throw new RuntimeException('Der LCN-Bus ist durch parallele Jalousiebefehle länger als 15 Sekunden belegt.');
+        if (!IPS_SemaphoreEnter($lockName, 20000)) {
+            throw new RuntimeException('Der LCN-Bus ist durch parallele Jalousiebefehle länger als 20 Sekunden belegt.');
         }
+        $ok = false;
         try {
-            // Nach dem Warten auf die sendemodulweite Sperre wird der Zustand
-            // erneut geprüft. Damit kann ein inzwischen eingetroffener externer
-            // oder paralleler Relaiswechsel nicht mit einem falschen Toggle
-            // beantwortet werden.
+            $this->waitForOtherCommandLease(15000);
             $lockedState = $this->selectedRelayState($relayUpID, $relayDownID);
             if (!$this->relayCommandStillRequired($lockedState, $expectedRelayState, $direction, 'unmittelbar vor LCN_SendCommand')) {
+                $this->clearCommandLeaseState();
                 $this->SendDebug('DirectionCommand', 'STOP während Sendesperre bereits durch Relais-AUS erfüllt; kein Toggle gesendet.', 0);
                 return true;
             }
-            $ok = LCN_SendCommand($sendModuleID, 'TS', $data);
-            if ($ok) {
+
+            $this->WriteAttributeString('ForeignRelayResponse', '');
+            $this->markCommandLeaseState($direction, $expectedRelayState);
+            try {
+                $ok = LCN_SendCommand($sendModuleID, 'TS', $data);
+            } catch (Throwable $sendError) {
+                $this->clearCommandLeaseState();
+                throw $sendError;
+            }
+            if (!$ok) {
+                $this->clearCommandLeaseState();
+            } else {
                 $spacingMs = max(0, min(1000, $this->ReadPropertyInteger('CommandSpacingMs')));
                 if ($spacingMs > 0) {
-                    IPS_Sleep($spacingMs);
+                    try {
+                        IPS_Sleep($spacingMs);
+                    } catch (Throwable $sleepError) {
+                        // Das Telegramm wurde bereits angenommen. Ein Fehler in
+                        // der reinen Busabstandspause darf deshalb nicht als
+                        // fehlgeschlagene Sendung behandelt oder erneut gesendet werden.
+                        $this->SendDebug('DirectionCommand', 'Busabstandspause fehlgeschlagen: ' . $sleepError->getMessage(), 0);
+                    }
                 }
             }
         } finally {
@@ -777,6 +871,59 @@ class LCNJalousie extends IPSModuleStrict
             0
         );
         return true;
+    }
+
+    private function monotonicMs(): float
+    {
+        $nanoseconds = hrtime(true);
+        if ($nanoseconds === false) {
+            throw new RuntimeException('hrtime() ist auf dieser Plattform nicht verfuegbar.');
+        }
+        return (float) $nanoseconds / 1000000.0;
+    }
+
+    private function markCommandLeaseState(int $direction, int $expectedRelayState): void
+    {
+        $this->WriteAttributeInteger('CommandLeaseDirection', $direction);
+        $this->WriteAttributeInteger('CommandLeaseExpectedState', $expectedRelayState);
+        $this->WriteAttributeString('CommandLeaseStartedMs', (string) $this->monotonicMs());
+        $this->WriteAttributeBoolean('CommandLeaseActive', true);
+    }
+
+    private function clearCommandLeaseState(): void
+    {
+        $this->WriteAttributeBoolean('CommandLeaseActive', false);
+        $this->WriteAttributeInteger('CommandLeaseDirection', 0);
+        $this->WriteAttributeInteger('CommandLeaseExpectedState', -1);
+        $this->WriteAttributeString('CommandLeaseStartedMs', '0');
+    }
+
+    private function waitForOtherCommandLease(int $timeoutMs): void
+    {
+        if (!IPS_FunctionExists('IPS_GetInstanceListByModuleID') || !IPS_FunctionExists('LCNJAL_GetCommandLease')) {
+            return;
+        }
+        $deadline = $this->monotonicMs() + max(0, $timeoutMs);
+        do {
+            $blocking = [];
+            foreach (IPS_GetInstanceListByModuleID(self::MODULE_ID) as $instanceID) {
+                $instanceID = (int) $instanceID;
+                if ($instanceID <= 0 || $instanceID === $this->InstanceID || !IPS_InstanceExists($instanceID)) {
+                    continue;
+                }
+                $lease = json_decode(LCNJAL_GetCommandLease($instanceID), true);
+                if (is_array($lease) && (bool) ($lease['active'] ?? false)) {
+                    $blocking[] = (string) ($lease['instanceName'] ?? ('#' . $instanceID)) . ' (#' . $instanceID . ')';
+                }
+            }
+            if ($blocking === []) {
+                return;
+            }
+            if ($this->monotonicMs() >= $deadline) {
+                throw new RuntimeException('Vorheriger Jalousiebefehl noch nicht real bestätigt: ' . implode(', ', $blocking));
+            }
+            IPS_Sleep(50);
+        } while (true);
     }
 
     private function selectedRelayState(int $relayUpID, int $relayDownID): int
@@ -1101,6 +1248,14 @@ class LCNJalousie extends IPSModuleStrict
             'stopStatusRelayDownFresh' => $read($internalCategoryID, 'Stopstatus_Relais_AB_Empfangen', false),
             'verifiedStopRetrySent' => $read($internalCategoryID, 'Stop_Wiederholung_Gesendet', false),
             'commandSentTimestampMs' => $read($internalCategoryID, 'Befehl_gesendet_ms', 0.0),
+            'externalReferenceSet' => $read($internalCategoryID, 'Externe_Referenz_Gesetzt', false),
+            'externalEndDeadlineMs' => $read($internalCategoryID, 'Externe_Endlage_bis_ms', 0.0),
+            'externalAutoStopDeadlineMs' => $read($internalCategoryID, 'Externer_Autostopp_bis_ms', 0.0),
+            'externalAutoStopActive' => $read($internalCategoryID, 'Externer_Autostopp_Aktiv', false),
+            'possibleForeignCommandSourceInstanceID' => $read($internalCategoryID, 'Fremdbefehl_Quelle', 0),
+            'possibleForeignCommandDetectedMs' => $read($internalCategoryID, 'Fremdbefehl_Erkannt_ms', 0.0),
+            'commandLease' => json_decode($this->GetCommandLease(), true),
+            'foreignRelayResponse' => json_decode($this->GetForeignRelayResponse(), true),
         ];
     }
 
@@ -1859,15 +2014,33 @@ class LCNJalousie extends IPSModuleStrict
     private function restorePersistentReference(int $stateCategoryID): void
     {
         $valid = $this->ReadAttributeBoolean('ReferenceValid');
-        $position = $this->ReadAttributeFloat('ReferencePosition');
-        $slat = $this->ReadAttributeFloat('ReferenceSlat');
+        $referencePosition = $this->ReadAttributeFloat('ReferencePosition');
+        $referenceSlat = $this->ReadAttributeFloat('ReferenceSlat');
         $timestamp = $this->ReadAttributeInteger('ReferenceTimestamp');
         $reason = $this->ReadAttributeString('ReferenceReason');
-        $this->writeReferenceObjects($stateCategoryID, $valid, $position, $slat, $timestamp, $reason);
+
+        // ReferencePosition/ReferenceSlat beschreiben die zuletzt sicher
+        // erreichte Endlage, nicht die aktuelle Zwischenposition. Die sichtbaren
+        // Istwerte sind eigenständig persistent und dürfen bei ApplyChanges oder
+        // Neustart nicht auf diese Endlage zurückgesetzt werden.
+        $this->writeReferenceObjects(
+            $stateCategoryID,
+            $valid,
+            $referencePosition,
+            $referenceSlat,
+            $timestamp,
+            $reason,
+            false
+        );
         $this->SetValue('Referenziert', $valid);
-        if ($valid) {
-            $this->SetValue('Position', (int) round($position));
-            $this->SetValue('Drehgrad', (int) round($slat));
+
+        $positionID = @IPS_GetObjectIDByIdent('Ist_Behang', $stateCategoryID);
+        $slatID = @IPS_GetObjectIDByIdent('Ist_Lamelle', $stateCategoryID);
+        if ($positionID !== false && IPS_VariableExists((int) $positionID)) {
+            $this->SetValue('Position', (int) round(max(0.0, min(100.0, GetValueFloat((int) $positionID)))));
+        }
+        if ($slatID !== false && IPS_VariableExists((int) $slatID)) {
+            $this->SetValue('Drehgrad', (int) round(max(0.0, min(100.0, GetValueFloat((int) $slatID)))));
         }
     }
 
@@ -1886,7 +2059,15 @@ class LCNJalousie extends IPSModuleStrict
         );
     }
 
-    private function writeReferenceObjects(int $stateCategoryID, bool $valid, float $position, float $slat, int $timestamp, string $reason): void
+    private function writeReferenceObjects(
+        int $stateCategoryID,
+        bool $valid,
+        float $position,
+        float $slat,
+        int $timestamp,
+        string $reason,
+        bool $writeCurrentPosition = true
+    ): void
     {
         $referencedID = @IPS_GetObjectIDByIdent('Position_Referenziert', $stateCategoryID);
         if ($referencedID !== false && IPS_VariableExists((int) $referencedID)) {
@@ -1894,10 +2075,10 @@ class LCNJalousie extends IPSModuleStrict
         }
         $positionID = @IPS_GetObjectIDByIdent('Ist_Behang', $stateCategoryID);
         $slatID = @IPS_GetObjectIDByIdent('Ist_Lamelle', $stateCategoryID);
-        if ($valid && $positionID !== false && IPS_VariableExists((int) $positionID)) {
+        if ($valid && $writeCurrentPosition && $positionID !== false && IPS_VariableExists((int) $positionID)) {
             SetValueFloat((int) $positionID, $position);
         }
-        if ($valid && $slatID !== false && IPS_VariableExists((int) $slatID)) {
+        if ($valid && $writeCurrentPosition && $slatID !== false && IPS_VariableExists((int) $slatID)) {
             SetValueFloat((int) $slatID, $slat);
         }
         $endID = @IPS_GetObjectIDByIdent('Referenz_Endlage', $stateCategoryID);
@@ -2103,6 +2284,11 @@ class LCNJalousie extends IPSModuleStrict
             ['Stop_Wiederholung_Gesendet', 'Verifizierte STOP-Wiederholung gesendet', 0, '~Switch', 360, false, false],
             ['Befehl_gesendet_ms', 'LCN-Befehl gesendet [monotone ms]', 2, '', 370, 0.0, false],
             ['Externe_Referenz_Gesetzt', 'Externe Endlage während aktueller Fahrt referenziert', 0, '~Switch', 380, false, false],
+            ['Externe_Endlage_bis_ms', 'Externe sichere Endlage bis [monotone ms]', 2, '', 390, 0.0, false],
+            ['Externer_Autostopp_bis_ms', 'Externer Endlagen-Autostopp bis [monotone ms]', 2, '', 400, 0.0, false],
+            ['Externer_Autostopp_Aktiv', 'Externer Endlagen-Autostopp aktiv', 0, '~Switch', 410, false, false],
+            ['Fremdbefehl_Quelle', 'Möglicher fremder Symcon-Befehl von Instanz', 1, '', 420, 0, false],
+            ['Fremdbefehl_Erkannt_ms', 'Möglicher Fremdbefehl erkannt [monotone ms]', 2, '', 430, 0.0, false],
         ];
         foreach ($schema as $v) {
             $this->variable($parentID, ...$v);
@@ -2256,7 +2442,16 @@ class LCNJalousie extends IPSModuleStrict
         $workerID = $this->find($scriptsCategoryID, 'Worker');
         $healthID = $this->find($scriptsCategoryID, 'Healthcheck');
         IPS_SetScriptTimer($workerID, 0);
-        IPS_SetScriptTimer($healthID, $enabled ? $this->ReadPropertyInteger('HealthcheckSeconds') : 0);
+        // Der Healthcheck bleibt bei aktiviertem Modul auch während einer
+        // Fehlerverriegelung oder vorübergehend fehlender Laufzeitfreigabe aktiv.
+        // Er darf dann keine Bedienaufträge ausführen, sichert aber externe
+        // Relaisfahrten und die automatische Endlagenabschaltung unabhängig ab.
+        IPS_SetScriptTimer(
+            $healthID,
+            $this->ReadPropertyBoolean('ModuleEnabled')
+                ? max(1, $this->ReadPropertyInteger('HealthcheckSeconds'))
+                : 0
+        );
 
         if (!$enabled) {
             $internalCategoryID = @IPS_GetObjectIDByIdent('05_Intern', $this->InstanceID);

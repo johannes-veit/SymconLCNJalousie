@@ -89,6 +89,18 @@ def check_php() -> None:
             )
 
 
+    interaction_test = ROOT / 'tests' / 'interaction_matrix_test.py'
+    if not interaction_test.is_file():
+        ERRORS.append('missing regression test: tests/interaction_matrix_test.py')
+    else:
+        result = subprocess.run([sys.executable, str(interaction_test)], capture_output=True, text=True)
+        if result.returncode != 0 or 'INTERACTION MATRIX TEST OK' not in result.stdout:
+            ERRORS.append(
+                f'{interaction_test.relative_to(ROOT)}: interaction matrix test failed: '
+                f'{result.stdout}{result.stderr}'
+            )
+
+
 def check_module_identity(module_dir: Path) -> None:
     metadata_path = module_dir / 'module.json'
     php_path = module_dir / 'module.php'
@@ -990,14 +1002,17 @@ def check_restart_validation_lifecycle() -> None:
     apply_end = module.find('public function MessageSink', apply_start)
     if apply_start >= 0 and apply_end > apply_start:
         apply_body = module[apply_start:apply_end]
-        required_reference_guards = [
-            '&& !$startupWaiting',
-            '&& !$runtimeDependencyUnavailable',
-        ]
-        for guard in required_reference_guards:
-            if guard not in apply_body:
+        if 'invalidateReferenceWithoutCommand' in apply_body:
+            ERRORS.append(
+                f'{module_path.relative_to(ROOT)}: ApplyChanges/runtime state changes must not erase a persistent reference'
+            )
+        for required in [
+            '$this->clearCommandLeaseState();',
+            "$this->WriteAttributeString('ForeignRelayResponse', '');",
+        ]:
+            if required not in apply_body:
                 ERRORS.append(
-                    f'{module_path.relative_to(ROOT)}: transient restart state must not invalidate the persistent reference ({guard})'
+                    f'{module_path.relative_to(ROOT)}: ApplyChanges must discard stale cross-instance command transactions ({required})'
                 )
 
     startup_start = module.find('public function CompleteStartupValidation')
@@ -1016,8 +1031,8 @@ def check_restart_validation_lifecycle() -> None:
     required_healthcheck = [
         "IPS_FunctionExists('LCNJAL_CompleteStartupValidation')",
         'LCNJAL_CompleteStartupValidation($rootID);',
-        "IPS_FunctionExists('LCNJAL_IsRuntimePermitted')",
-        '!LCNJAL_IsRuntimePermitted($rootID)',
+        "IPS_RunScriptWaitEx($controllerID, ['ACTION' => 'HEALTHCHECK']);",
+        'Der Healthcheck läuft auch bei einer Fehlerverriegelung weiter',
     ]
     for pattern in required_healthcheck:
         if pattern not in healthcheck:

@@ -35,10 +35,10 @@ $rootID = IPS_GetParent(IPS_GetParent($self));
 if (IPS_FunctionExists('LCNJAL_CompleteStartupValidation')) {
     LCNJAL_CompleteStartupValidation($rootID);
 }
-if (IPS_FunctionExists('LCNJAL_IsRuntimePermitted')
-    && !LCNJAL_IsRuntimePermitted($rootID)) {
-    return;
-}
-
+// Der Healthcheck läuft auch bei einer Fehlerverriegelung weiter. Der
+// Controller lässt in diesem Zustand keine Visualisierungsaufträge zu, darf
+// aber reale Relaisfahrten verfolgen und einen bereits sicher fälligen
+// externen Endlagen-STOP absichern. Bei bewusst deaktiviertem Modul wird kein
+// TS-Toggle erzeugt.
 $controllerID = JH_ID($rootID, '06_Skripte', 'Controller');
 IPS_RunScriptWaitEx($controllerID, ['ACTION' => 'HEALTHCHECK']);

@@ -1,8 +1,21 @@
-## 0.1.22
+# Changelog
+
+## 0.1.23 – 2026-08-06
+
+- Referenzverlust beim Start eines neuen Fahrbefehls behoben: Eine gültige Referenz bleibt während normaler Symcon- und externer Fahrten erhalten und wird an sicher erreichten Endlagen aktualisiert. Nur nachweislich positionsunsichere Abläufe verwerfen sie noch.
+- Aktuelle Zwischenposition und zuletzt sichere Referenz-Endlage werden getrennt persistiert. `ApplyChanges`, Neustart und Fehlerquittierung setzen die Positionsanzeige nicht mehr auf die letzte Endlage zurück.
+- Externe LCN-/GT8-Fahrten werden nach sicher berechneter Endlage referenziert. Bleibt das ausgewählte Relais danach während des Kalibrierfensters aktiv, sendet Symcon genau einen richtungsgebundenen KURZ-Befehl und überwacht die reale AUS-Bestätigung.
+- Worker und Healthcheck sichern externe Endlagen- und Autostopp-Deadlines unabhängig voneinander ab. Der Healthcheck bleibt bei aktiviertem Modul auch während einer Fehlerverriegelung aktiv; Visualisierungsbefehle bleiben gesperrt.
+- Instanzübergreifende Toggle-Transaktionen eingeführt: Solange ein Start-/STOP-Telegramm noch keine reale Relaisbestätigung hat, darf keine andere Jalousieinstanz einen weiteren Toggle senden. Nach der Bestätigung wird die Sperre sofort gelöst, sodass mehrere unterschiedliche Jalousien gleichzeitig fahren dürfen.
+- Alte Befehls-Sperren werden bei `ApplyChanges`, Kernelstart und erkanntem `hrtime()`-Neustart verworfen. Ein Sendefehler oder eine fehlgeschlagene reine Busabstandspause kann kein unkontrolliertes Wiederholungstelegramm erzeugen.
+- Startet während einer eindeutig offenen Symcon-Transaktion das Relais einer anderen Instanz, wird dies dem Sender als TS-Routingabweichung gemeldet. Der Sender wird für weitere Visualisierungsbefehle verriegelt; die tatsächlich fahrende Jalousie wird als externe Fahrt sicher bis Endlage und Autostopp überwacht.
+- Doppelte Relais-, GT8- und identische TS-KURZ-Zuordnungen bleiben bereits bei der Konfigurationsprüfung gesperrt. Fahrbefehle werden weiterhin ausschließlich aus den Properties der aufgerufenen Instanz gebildet.
+- Regressionen erweitert auf 35 statische Ablauf-Invarianten, fünf gezielte Übergangsmodelle, vier kombinierte Bedienfälle und 100.000 randomisierte Modelloperationen.
+
+## 0.1.22 – 2026-08-06
 
 - Externe LCN-Priorität, berührungslose Endlagenreferenzierung und stabilere Mischbedienung.
 
-# Changelog
 
 ## 0.1.21 – 2026-08-05
 
