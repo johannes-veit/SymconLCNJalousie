@@ -5,13 +5,13 @@ declare(strict_types=1);
 /**
  * LCN Jalousie – Symcon 9.0 compatibility module.
  *
- * This module creates and maintains the V11.7 object tree, runtime scripts,
+ * This module creates and maintains the V11.9 object tree, runtime scripts,
  * events, links and configuration values below one module instance.
  * The motor interlock and local operation remain in LCN-PRO.
  */
 class LCNJalousie extends IPSModuleStrict
 {
-    private const VERSION = '0.1.23';
+    private const VERSION = '0.1.27';
     private const EXECUTE_PARENT_ACTION = '{7938A5A2-0981-5FE0-BE6C-8AA610D654EB}';
 
     private const STATUS_ACTIVE = 102;
@@ -28,6 +28,7 @@ class LCNJalousie extends IPSModuleStrict
     private const STATUS_RELAY_CONFLICT = 211;
     private const STATUS_FAULT_LATCHED = 212;
     private const STATUS_BINDING_CONFLICT = 213;
+    private const STATUS_LCN_ADDRESS_CONFLICT = 214;
 
     // Symcon-Nachrichten und Runlevel. Numerisch festgehalten, damit die
     // Startlogik unabhängig von der Reihenfolge der geladenen PHP-Konstanten
@@ -37,6 +38,7 @@ class LCNJalousie extends IPSModuleStrict
     private const KERNEL_READY = 10103;
     private const STARTUP_VALIDATION_GRACE_SECONDS = 30;
     private const MODULE_ID = '{3057B192-E835-4916-AF1D-D89D6302DF74}';
+    private const LCN_MODULE_ID = '{0E31FED6-E465-4621-95D4-AAF2683C41EC}';
 
     public function Create(): void
     {
@@ -102,6 +104,9 @@ class LCNJalousie extends IPSModuleStrict
         $this->RegisterAttributeInteger('CommandLeaseExpectedState', -1);
         $this->RegisterAttributeString('CommandLeaseStartedMs', '0');
         $this->RegisterAttributeString('ForeignRelayResponse', '');
+        $this->RegisterAttributeString('BlockedRoutingFingerprint', '');
+        $this->RegisterAttributeString('BlockedRoutingReason', '');
+        $this->RegisterAttributeBoolean('RoutingRearmAllowed', false);
     }
 
     public function ApplyChanges(): void
@@ -113,6 +118,20 @@ class LCNJalousie extends IPSModuleStrict
         // gesetzt, damit die HTML-Kachel zuverlässig aktiviert wird.
         $this->SetVisualizationType(1);
 
+        // Während des Neuaufbaus dürfen alte Ereignisse und Timer keinen
+        // Controllerlauf gegen halb aktualisierte Modulfunktionen auslösen.
+        // Die reale LCN-/GT8-Bedienung bleibt davon unberührt; nach dem Update
+        // folgt ein vollständiger Statusabgleich.
+        $this->SetBuffer('MaintenanceActive', '1');
+        try {
+            $this->suspendRuntimeForApplyChanges();
+        } catch (Throwable $maintenanceError) {
+            // Der eigentliche Neuaufbau darf trotz eines beschädigten alten
+            // Laufzeitbaums fortgesetzt werden. Solange MaintenanceActive
+            // gesetzt ist, verwirft der Controller alle Bedienaufrufe.
+            $this->SendDebug('ApplyChanges', 'Alte Laufzeit konnte nicht vollständig angehalten werden: ' . $maintenanceError->getMessage(), 0);
+        }
+
         // Eine nicht bestätigte Toggle-Transaktion darf weder einen Neustart
         // noch ein erneutes ApplyChanges überleben. Die reale Relaislage wird
         // anschließend ausschließlich über den Statusabgleich neu bewertet.
@@ -120,6 +139,7 @@ class LCNJalousie extends IPSModuleStrict
         $this->WriteAttributeString('ForeignRelayResponse', '');
 
         try {
+            $this->updateRoutingBlockAfterConfigurationChange();
             $this->registerRuntimeMessages();
             $this->SetBuffer('StartupValidationDeadline', '0');
             $previousGeneratedVersion = $this->ReadAttributeString('GeneratedVersion');
@@ -131,6 +151,7 @@ class LCNJalousie extends IPSModuleStrict
             $this->migratePersistentReference($ids['state'], $previousGeneratedVersion);
             $this->invalidateReferenceAfterModelUpdate($ids['state'], $previousGeneratedVersion);
             $this->restorePersistentReference($ids['state']);
+            $this->migrateLegacyStartConfirmationFault($previousGeneratedVersion);
             $this->applySafetyMigration($ids['control'], $ids['state'], $previousGeneratedVersion);
             $this->ensureHardwareLinks($ids['lcn']);
             $this->ensureEvents($ids['scripts']);
@@ -159,6 +180,12 @@ class LCNJalousie extends IPSModuleStrict
             }
 
             $this->WriteAttributeString('LastValidation', json_encode($validation, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+
+            // Reine Update-/Initialisierungsfehler werden nach einem jetzt
+            // erfolgreichen Neuaufbau automatisch aufgehoben, sofern beide
+            // ausgewählten Motorrelais sicher AUS sind. Motor-, STOP- und
+            // Routingfehler bleiben weiterhin quittierungspflichtig.
+            $this->autoRecoverTransientMaintenanceFault($validation);
 
             $moduleEnabled = $this->ReadPropertyBoolean('ModuleEnabled');
             $faultLatched = $this->ReadAttributeBoolean('FaultLatched');
@@ -240,6 +267,8 @@ class LCNJalousie extends IPSModuleStrict
             $this->SetSummary('inaktiv · Aufbaufehler quittieren');
             $this->SendDebug('ApplyChanges', $e->getMessage(), 0);
             IPS_LogMessage('LCN Jalousie #' . $this->InstanceID, $e->getMessage());
+        } finally {
+            $this->SetBuffer('MaintenanceActive', '0');
         }
     }
 
@@ -292,6 +321,11 @@ class LCNJalousie extends IPSModuleStrict
                 'LastValidation',
                 json_encode($runtimeValidation, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)
             );
+
+            // Wurde eine reine Updateverriegelung zunächst nur wegen noch
+            // startender LCN-Abhängigkeiten beibehalten, wird sie hier nach
+            // erfolgreicher Laufzeitprüfung ebenfalls automatisch bereinigt.
+            $this->autoRecoverTransientMaintenanceFault($runtimeValidation);
 
             if ($runtimeDependencyUnavailable && $withinGrace) {
                 // Keine falsche Konfigurationsmeldung während LCN/PCHK seine
@@ -458,6 +492,7 @@ class LCNJalousie extends IPSModuleStrict
                     'expanded' => true,
                     'items' => [
                         ['type' => 'Label', 'caption' => 'Wählen Sie vorhandene LCN-Objekte aus. Das Modul legt keine LCN-Verbindung und keine LCN-PRO-Programmierung an.'],
+                        ['type' => 'Label', 'caption' => $this->resolvedAddressCaption()],
                         ['type' => 'SelectInstance', 'name' => 'LCNSendModuleID', 'caption' => 'LCN-Sendemodul für virtuelle TS-Tasten (Haupt-UPU des GT8, z. B. M22)'],
                         ['type' => 'SelectInstance', 'name' => 'LCNActorModuleID', 'caption' => 'LCN-Aktormodul mit Motorrelais (z. B. M93)'],
                         ['type' => 'SelectVariable', 'name' => 'RelayUpVariableID', 'caption' => 'Reale Relaisstatusvariable AUF', 'validVariableTypes' => [0]],
@@ -515,7 +550,7 @@ class LCNJalousie extends IPSModuleStrict
                         ['type' => 'NumberSpinner', 'name' => 'WorkerWindowMs', 'caption' => 'Millisekunden-Schlussfenster', 'suffix' => ' ms', 'minimum' => 1000, 'maximum' => 3000],
                         ['type' => 'NumberSpinner', 'name' => 'StatusSyncMs', 'caption' => 'LCN-Statusabgleich', 'suffix' => ' ms', 'minimum' => 500, 'maximum' => 10000],
                         ['type' => 'NumberSpinner', 'name' => 'RelayCoalesceMs', 'caption' => 'Relaismeldungen zusammenfassen', 'suffix' => ' ms', 'minimum' => 0, 'maximum' => 1000],
-                        ['type' => 'NumberSpinner', 'name' => 'CommandSpacingMs', 'caption' => 'Mindestabstand zwischen LCN-Telegrammen aller Jalousieinstanzen', 'suffix' => ' ms', 'minimum' => 0, 'maximum' => 1000],
+                        ['type' => 'NumberSpinner', 'name' => 'CommandSpacingMs', 'caption' => 'Mindestabstand zwischen LCN-Telegrammen aller Jalousieinstanzen (effektiv mindestens 100 ms)', 'suffix' => ' ms', 'minimum' => 0, 'maximum' => 1000],
                         ['type' => 'NumberSpinner', 'name' => 'HealthcheckSeconds', 'caption' => 'Healthcheck / unabhängige STOP-Überwachung', 'suffix' => ' s', 'minimum' => 10, 'maximum' => 300],
                         ['type' => 'CheckBox', 'name' => 'RequestStatusOnStart', 'caption' => 'LCN-Status beim Initialisieren anfordern'],
                         ['type' => 'CheckBox', 'name' => 'AllowUnreferenced', 'caption' => 'Fahrt ohne vorherige Referenz erlauben'],
@@ -548,6 +583,7 @@ class LCNJalousie extends IPSModuleStrict
                 ['code' => self::STATUS_RELAY_CONFLICT, 'icon' => 'error', 'caption' => 'AUF und AB melden gleichzeitig TRUE – Motorbetrieb gesperrt'],
                 ['code' => self::STATUS_FAULT_LATCHED, 'icon' => 'error', 'caption' => 'Fehler verriegelt – Symcon inaktiv bis zur Quittierung'],
                 ['code' => self::STATUS_BINDING_CONFLICT, 'icon' => 'error', 'caption' => 'Relais-, GT8- oder TS-Zuordnung wird von mehreren Jalousieinstanzen verwendet'],
+                ['code' => self::STATUS_LCN_ADDRESS_CONFLICT, 'icon' => 'error', 'caption' => 'Reale LCN-Adresse widerspricht dem Instanznamen oder ist doppelt angelegt'],
             ],
         ];
 
@@ -686,16 +722,29 @@ class LCNJalousie extends IPSModuleStrict
 
     public function GetHardwareBinding(): string
     {
+        $sendModuleID = $this->ReadPropertyInteger('LCNSendModuleID');
+        $actorModuleID = $this->ReadPropertyInteger('LCNActorModuleID');
+        $gt8LongUpVariableID = $this->ReadPropertyInteger('GT8LongUpVariableID');
+        $gt8LongDownVariableID = $this->ReadPropertyInteger('GT8LongDownVariableID');
+        $gt8UpSourceModuleID = $this->findConnectedLcnModuleForVariable($gt8LongUpVariableID, false);
+        $gt8DownSourceModuleID = $this->findConnectedLcnModuleForVariable($gt8LongDownVariableID, false);
+
         $binding = [
             'instanceID' => $this->InstanceID,
-            'sendModuleID' => $this->ReadPropertyInteger('LCNSendModuleID'),
-            'actorModuleID' => $this->ReadPropertyInteger('LCNActorModuleID'),
+            'sendModuleID' => $sendModuleID,
+            'actorModuleID' => $actorModuleID,
             'relayUpVariableID' => $this->ReadPropertyInteger('RelayUpVariableID'),
             'relayDownVariableID' => $this->ReadPropertyInteger('RelayDownVariableID'),
-            'gt8LongUpVariableID' => $this->ReadPropertyInteger('GT8LongUpVariableID'),
-            'gt8LongDownVariableID' => $this->ReadPropertyInteger('GT8LongDownVariableID'),
+            'gt8LongUpVariableID' => $gt8LongUpVariableID,
+            'gt8LongDownVariableID' => $gt8LongDownVariableID,
+            'gt8LongUpSourceModuleID' => $gt8UpSourceModuleID,
+            'gt8LongDownSourceModuleID' => $gt8DownSourceModuleID,
             'tsShortUp' => $this->ReadPropertyString('TSShortUp'),
             'tsShortDown' => $this->ReadPropertyString('TSShortDown'),
+            'sendModuleAddress' => $this->resolveLcnModuleAddress($sendModuleID),
+            'actorModuleAddress' => $this->resolveLcnModuleAddress($actorModuleID),
+            'gt8LongUpSourceAddress' => $this->resolveLcnModuleAddress($gt8UpSourceModuleID),
+            'gt8LongDownSourceAddress' => $this->resolveLcnModuleAddress($gt8DownSourceModuleID),
         ];
 
         return json_encode($binding, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}';
@@ -732,22 +781,55 @@ class LCNJalousie extends IPSModuleStrict
         $this->clearCommandLeaseState();
     }
 
-    public function ReportForeignRelayResponse(int $receiverInstanceID, int $direction): void
+    public function ReportForeignRelayResponse(int $receiverInstanceID, int $direction, string $correlationJson = ''): void
     {
         if ($receiverInstanceID <= 0 || !in_array($direction, [1, 2], true)) {
             return;
         }
-        $this->WriteAttributeString('ForeignRelayResponse', json_encode([
+        $correlation = json_decode($correlationJson, true);
+        if (!is_array($correlation)) {
+            $correlation = [];
+        }
+        $payload = [
+            'correlationCandidate' => (bool) ($correlation['correlationCandidate'] ?? false),
+            'ownerDirection' => (int) ($correlation['ownerDirection'] ?? 0),
+            'ownerTs' => (string) ($correlation['ownerTs'] ?? ''),
+            'ownerSendRouteKey' => (string) ($correlation['ownerSendRouteKey'] ?? ''),
+            'ownerLeaseStartedMs' => (float) ($correlation['ownerLeaseStartedMs'] ?? 0.0),
+            'receiverActorRouteKey' => (string) ($correlation['receiverActorRouteKey'] ?? ''),
+            'receiverRelayUpVariableID' => (int) ($correlation['receiverRelayUpVariableID'] ?? 0),
+            'receiverRelayDownVariableID' => (int) ($correlation['receiverRelayDownVariableID'] ?? 0),
             'receiverInstanceID' => $receiverInstanceID,
             'receiverName' => IPS_InstanceExists($receiverInstanceID) ? IPS_GetName($receiverInstanceID) : '',
             'direction' => $direction,
             'reportedMs' => $this->monotonicMs(),
-        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '');
+        ];
+        $this->WriteAttributeString(
+            'ForeignRelayResponse',
+            json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: ''
+        );
     }
 
     public function GetForeignRelayResponse(): string
     {
         return $this->ReadAttributeString('ForeignRelayResponse');
+    }
+
+    public function BlockCurrentRouting(string $reason): void
+    {
+        $this->WriteAttributeString('BlockedRoutingFingerprint', $this->currentRoutingFingerprint());
+        $this->WriteAttributeString('BlockedRoutingReason', trim($reason));
+        $this->WriteAttributeBoolean('RoutingRearmAllowed', false);
+    }
+
+    public function GetRoutingBlock(): string
+    {
+        return json_encode([
+            'active' => $this->routingIsBlocked(),
+            'fingerprint' => $this->ReadAttributeString('BlockedRoutingFingerprint'),
+            'reason' => $this->ReadAttributeString('BlockedRoutingReason'),
+            'rearmAllowed' => $this->ReadAttributeBoolean('RoutingRearmAllowed'),
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}';
     }
 
     public function SendExternalEndStop(int $direction): bool
@@ -780,6 +862,9 @@ class LCNJalousie extends IPSModuleStrict
         if ($allowFaultLatchedExternalStop && !$this->ReadPropertyBoolean('ModuleEnabled')) {
             throw new RuntimeException('Jalousiesteuerung ist deaktiviert.');
         }
+        if ($this->routingIsBlocked()) {
+            throw new RuntimeException('Diese reale Sendemodul-/TS-Route ist nach einem bestätigten Fremdstart gesperrt. Segment/Target beziehungsweise TS-Zuordnung korrigieren. Eine geänderte Senderoute wird automatisch neu bewertet; bei unveränderter Route ist eine erneute zweistufige TS-Abnahme erforderlich.');
+        }
 
         $validation = $this->validateConfiguration(true, true);
         if ($validation['status'] !== self::STATUS_ACTIVE) {
@@ -810,15 +895,16 @@ class LCNJalousie extends IPSModuleStrict
             throw new RuntimeException('TS-Zuordnung ist nicht gültig und bestätigt.');
         }
 
-        // Nur noch nicht bestätigte Toggle-Transaktionen werden serialisiert.
-        // Nach realer Startbestätigung dürfen mehrere Jalousien parallel fahren.
+        // Nur das sehr kurze Senden des Telegramms wird global serialisiert.
+        // Offene Relaisbestätigungen anderer Instanzen blockieren den nächsten
+        // Start nicht mehr. Dadurch können mehrere Motoren innerhalb weniger
+        // Sekunden anlaufen, während der Mindestabstand den LCN-Bus schützt.
         $lockName = 'LCNJAL_LCN_BUS_SEND';
         if (!IPS_SemaphoreEnter($lockName, 20000)) {
             throw new RuntimeException('Der LCN-Bus ist durch parallele Jalousiebefehle länger als 20 Sekunden belegt.');
         }
         $ok = false;
         try {
-            $this->waitForOtherCommandLease(15000);
             $lockedState = $this->selectedRelayState($relayUpID, $relayDownID);
             if (!$this->relayCommandStillRequired($lockedState, $expectedRelayState, $direction, 'unmittelbar vor LCN_SendCommand')) {
                 $this->clearCommandLeaseState();
@@ -837,7 +923,7 @@ class LCNJalousie extends IPSModuleStrict
             if (!$ok) {
                 $this->clearCommandLeaseState();
             } else {
-                $spacingMs = max(0, min(1000, $this->ReadPropertyInteger('CommandSpacingMs')));
+                $spacingMs = max(100, min(1000, $this->ReadPropertyInteger('CommandSpacingMs')));
                 if ($spacingMs > 0) {
                     try {
                         IPS_Sleep($spacingMs);
@@ -898,34 +984,6 @@ class LCNJalousie extends IPSModuleStrict
         $this->WriteAttributeString('CommandLeaseStartedMs', '0');
     }
 
-    private function waitForOtherCommandLease(int $timeoutMs): void
-    {
-        if (!IPS_FunctionExists('IPS_GetInstanceListByModuleID') || !IPS_FunctionExists('LCNJAL_GetCommandLease')) {
-            return;
-        }
-        $deadline = $this->monotonicMs() + max(0, $timeoutMs);
-        do {
-            $blocking = [];
-            foreach (IPS_GetInstanceListByModuleID(self::MODULE_ID) as $instanceID) {
-                $instanceID = (int) $instanceID;
-                if ($instanceID <= 0 || $instanceID === $this->InstanceID || !IPS_InstanceExists($instanceID)) {
-                    continue;
-                }
-                $lease = json_decode(LCNJAL_GetCommandLease($instanceID), true);
-                if (is_array($lease) && (bool) ($lease['active'] ?? false)) {
-                    $blocking[] = (string) ($lease['instanceName'] ?? ('#' . $instanceID)) . ' (#' . $instanceID . ')';
-                }
-            }
-            if ($blocking === []) {
-                return;
-            }
-            if ($this->monotonicMs() >= $deadline) {
-                throw new RuntimeException('Vorheriger Jalousiebefehl noch nicht real bestätigt: ' . implode(', ', $blocking));
-            }
-            IPS_Sleep(50);
-        } while (true);
-    }
-
     private function selectedRelayState(int $relayUpID, int $relayDownID): int
     {
         $up = GetValueBoolean($relayUpID);
@@ -984,11 +1042,19 @@ class LCNJalousie extends IPSModuleStrict
         return $this->ReadAttributeBoolean('FaultLatched');
     }
 
+    public function IsMaintenanceActive(): bool
+    {
+        return $this->GetBuffer('MaintenanceActive') === '1';
+    }
+
     public function RequestAction(string $Ident, mixed $Value): void
     {
         if ($Ident === 'ResetError') {
             $this->AcknowledgeFault();
             return;
+        }
+        if ($this->IsMaintenanceActive()) {
+            throw new RuntimeException('Modulaktualisierung läuft. Der Bedienbefehl wurde nicht gesendet; bitte kurz erneut ausführen.');
         }
         if (!$this->IsRuntimePermitted()) {
             throw new RuntimeException('Jalousiesteuerung ist deaktiviert oder nach einem Fehler verriegelt. Zuerst Modul aktivieren beziehungsweise Fehler quittieren.');
@@ -1202,6 +1268,7 @@ class LCNJalousie extends IPSModuleStrict
                 'GT8LongDownSourceModuleID' => $this->findConnectedLcnModuleForVariable($this->ReadPropertyInteger('GT8LongDownVariableID')),
                 'TSMappingConfirmed' => $this->ReadPropertyBoolean('TSMappingConfirmed'),
                 'HardwareBinding' => json_decode($this->GetHardwareBinding(), true),
+                'ResolvedLCNAddresses' => $this->getResolvedLcnAddresses(),
             ],
             'runtime' => $this->getRuntimeDiagnostics(),
             'validation' => $validation,
@@ -1256,6 +1323,7 @@ class LCNJalousie extends IPSModuleStrict
             'possibleForeignCommandDetectedMs' => $read($internalCategoryID, 'Fremdbefehl_Erkannt_ms', 0.0),
             'commandLease' => json_decode($this->GetCommandLease(), true),
             'foreignRelayResponse' => json_decode($this->GetForeignRelayResponse(), true),
+            'routingBlock' => json_decode($this->GetRoutingBlock(), true),
         ];
     }
 
@@ -1592,6 +1660,22 @@ class LCNJalousie extends IPSModuleStrict
                 $status = self::STATUS_TS_INVALID;
             }
         }
+        if ($this->routingIsBlocked()) {
+            $messages[] = 'Die aktuelle Sendemodul-/TS-Zuordnung hat real eine andere Jalousie gestartet und bleibt gesperrt. Nach Korrektur in LCN-PRO: TS-Bestätigung deaktivieren und speichern, anschließend im Busmonitor prüfen, wieder aktivieren und erneut speichern.';
+            if ($status === self::STATUS_ACTIVE) {
+                $status = self::STATUS_TS_INVALID;
+            }
+        }
+
+        $addressConflicts = $this->validateSelectedLcnAddresses();
+        if ($addressConflicts !== []) {
+            foreach ($addressConflicts as $conflict) {
+                $messages[] = $conflict;
+            }
+            if ($status === self::STATUS_ACTIVE) {
+                $status = self::STATUS_LCN_ADDRESS_CONFLICT;
+            }
+        }
 
         $bindingConflicts = $this->findBindingConflicts();
         if ($bindingConflicts !== []) {
@@ -1659,7 +1743,7 @@ class LCNJalousie extends IPSModuleStrict
             || $commandSpacing > 1000
             || $healthcheck < 10
             || $healthcheck > 300) {
-            $messages[] = 'Zeitparameter sind widersprüchlich: Gesamtzeit 100→0 muss größer als die Wendezeit sein; Gesamtzeit 0→100 muss positiv sein; 0 ≤ Sanftanlauf ≤ Wendezeit; Sanft-Stopp AUF/ZU jeweils 0 bis kleiner als die zugehörige Behanglaufzeit; Referenzreserve ≥ 0; MaxFahrt mindestens längere Richtungs-Gesamtzeit + Reserve; ShakeFree 100 ms bis MaxFahrt; Workerfenster 1000…3000 ms; Start-/Stoppbestätigung 500…10000 ms; Spätstart-Schutz 500…30000 ms; Statussync 500…10000 ms; Relais-Koaleszenz und Befehlsabstand 0…1000 ms; Healthcheck 10…300 s; Kalibrierfenster 30000…120000 ms.';
+            $messages[] = 'Zeitparameter sind widersprüchlich: Gesamtzeit 100→0 muss größer als die Wendezeit sein; Gesamtzeit 0→100 muss positiv sein; 0 ≤ Sanftanlauf ≤ Wendezeit; Sanft-Stopp AUF/ZU jeweils 0 bis kleiner als die zugehörige Behanglaufzeit; Referenzreserve ≥ 0; MaxFahrt mindestens längere Richtungs-Gesamtzeit + Reserve; ShakeFree 100 ms bis MaxFahrt; Workerfenster 1000…3000 ms; Start-/Stoppbestätigung 500…10000 ms; Spätstart-Schutz 500…30000 ms; Statussync 500…10000 ms; Relais-Koaleszenz 0…1000 ms; Befehlsabstand 0…1000 ms (effektiv mindestens 100 ms); Healthcheck 10…300 s; Kalibrierfenster 30000…120000 ms.';
             if ($status === self::STATUS_ACTIVE) {
                 $status = self::STATUS_TIMING_INVALID;
             }
@@ -1671,6 +1755,235 @@ class LCNJalousie extends IPSModuleStrict
         }
 
         return ['status' => $status, 'messages' => $messages];
+    }
+
+    private function currentRoutingFingerprint(): string
+    {
+        $sendModuleID = $this->ReadPropertyInteger('LCNSendModuleID');
+        $actorModuleID = $this->ReadPropertyInteger('LCNActorModuleID');
+        $sendAddress = $this->resolveLcnModuleAddress($sendModuleID);
+        $actorAddress = $this->resolveLcnModuleAddress($actorModuleID);
+
+        return hash('sha256', json_encode([
+            'sendModuleID' => $sendModuleID,
+            'sendRouteKey' => (string) ($sendAddress['routeKey'] ?? ''),
+            'actorModuleID' => $actorModuleID,
+            'actorRouteKey' => (string) ($actorAddress['routeKey'] ?? ''),
+            'relayUpVariableID' => $this->ReadPropertyInteger('RelayUpVariableID'),
+            'relayDownVariableID' => $this->ReadPropertyInteger('RelayDownVariableID'),
+            'tsShortUp' => $this->ReadPropertyString('TSShortUp'),
+            'tsShortDown' => $this->ReadPropertyString('TSShortDown'),
+        ], JSON_UNESCAPED_SLASHES) ?: '');
+    }
+
+    private function routingIsBlocked(): bool
+    {
+        $blocked = $this->ReadAttributeString('BlockedRoutingFingerprint');
+        return $blocked !== '' && hash_equals($blocked, $this->currentRoutingFingerprint());
+    }
+
+    private function updateRoutingBlockAfterConfigurationChange(): void
+    {
+        $blocked = $this->ReadAttributeString('BlockedRoutingFingerprint');
+        if ($blocked === '') {
+            $this->WriteAttributeBoolean('RoutingRearmAllowed', false);
+            return;
+        }
+
+        if (!hash_equals($blocked, $this->currentRoutingFingerprint())) {
+            $this->WriteAttributeString('BlockedRoutingFingerprint', '');
+            $this->WriteAttributeString('BlockedRoutingReason', '');
+            $this->WriteAttributeBoolean('RoutingRearmAllowed', false);
+            return;
+        }
+
+        if (!$this->ReadPropertyBoolean('TSMappingConfirmed')) {
+            $this->WriteAttributeBoolean('RoutingRearmAllowed', true);
+            return;
+        }
+
+        if ($this->ReadAttributeBoolean('RoutingRearmAllowed')) {
+            $this->WriteAttributeString('BlockedRoutingFingerprint', '');
+            $this->WriteAttributeString('BlockedRoutingReason', '');
+            $this->WriteAttributeBoolean('RoutingRearmAllowed', false);
+        }
+    }
+
+    private function resolvedAddressCaption(): string
+    {
+        $resolved = $this->getResolvedLcnAddresses();
+        $parts = [];
+        foreach ([
+            'Sendemodul' => $resolved['sendModule'] ?? [],
+            'Aktormodul' => $resolved['actorModule'] ?? [],
+            'GT8 LANG AUF' => $resolved['gt8LongUpSource'] ?? [],
+            'GT8 LANG ZU' => $resolved['gt8LongDownSource'] ?? [],
+        ] as $label => $address) {
+            if (!is_array($address) || !(bool) ($address['valid'] ?? false)) {
+                continue;
+            }
+            $parts[] = $label . ' #' . (int) ($address['instanceID'] ?? 0)
+                . ' → (' . (string) ($address['address'] ?? '') . ')';
+        }
+        return $parts === []
+            ? 'Tatsächliche LCN-Adressen werden nach Auswahl aus den internen Segment-/Target-Werten angezeigt. Der Instanzname allein ist nicht maßgeblich.'
+            : 'Tatsächlich verwendete LCN-Adressen: ' . implode(' · ', $parts)
+                . '. Maßgeblich sind diese Segment-/Target-Werte, nicht der angezeigte Instanzname.';
+    }
+
+    private function resolveLcnModuleAddress(int $instanceID): array
+    {
+        if ($instanceID <= 0 || !IPS_InstanceExists($instanceID)) {
+            return [];
+        }
+
+        $instance = IPS_GetInstance($instanceID);
+        if (!function_exists('IPS_GetConfiguration')) {
+            return [
+                'instanceID' => $instanceID,
+                'instanceName' => IPS_GetName($instanceID),
+                'connectionID' => (int) ($instance['ConnectionID'] ?? 0),
+                'valid' => false,
+            ];
+        }
+        $configuration = json_decode(IPS_GetConfiguration($instanceID), true);
+        if (!is_array($configuration)
+            || !array_key_exists('Segment', $configuration)
+            || !array_key_exists('Target', $configuration)) {
+            return [
+                'instanceID' => $instanceID,
+                'instanceName' => IPS_GetName($instanceID),
+                'connectionID' => (int) ($instance['ConnectionID'] ?? 0),
+                'valid' => false,
+            ];
+        }
+
+        $segment = (int) $configuration['Segment'];
+        $target = (int) $configuration['Target'];
+        $connectionID = (int) ($instance['ConnectionID'] ?? 0);
+        $name = IPS_GetName($instanceID);
+        $nameSegment = null;
+        $nameTarget = null;
+        if (preg_match('/\((\d{1,3})\s*,\s*(\d{1,3})\)/', $name, $matches) === 1) {
+            $nameSegment = (int) $matches[1];
+            $nameTarget = (int) $matches[2];
+        }
+        $nameMatchesAddress = $nameSegment === null
+            ? null
+            : ($nameSegment === $segment && $nameTarget === $target);
+
+        return [
+            'instanceID' => $instanceID,
+            'instanceName' => $name,
+            'connectionID' => $connectionID,
+            'segment' => $segment,
+            'target' => $target,
+            'address' => sprintf('%03d,%03d', $segment, $target),
+            'routeKey' => $connectionID . ':' . $segment . ':' . $target,
+            'nameAddress' => $nameSegment === null ? '' : sprintf('%03d,%03d', $nameSegment, $nameTarget),
+            'nameMatchesAddress' => $nameMatchesAddress,
+            'duplicateInstanceIDs' => $this->findDuplicateLcnAddressInstances($instanceID, $connectionID, $segment, $target),
+            'valid' => true,
+        ];
+    }
+
+    private function findDuplicateLcnAddressInstances(
+        int $selectedInstanceID,
+        int $connectionID,
+        int $segment,
+        int $target
+    ): array {
+        if (!IPS_FunctionExists('IPS_GetInstanceListByModuleID')) {
+            return [];
+        }
+
+        $duplicates = [];
+        foreach (IPS_GetInstanceListByModuleID(self::LCN_MODULE_ID) as $instanceID) {
+            $instanceID = (int) $instanceID;
+            if ($instanceID <= 0 || $instanceID === $selectedInstanceID || !IPS_InstanceExists($instanceID)) {
+                continue;
+            }
+            $instance = IPS_GetInstance($instanceID);
+            if ((int) ($instance['InstanceStatus'] ?? 0) !== self::STATUS_ACTIVE
+                || (int) ($instance['ConnectionID'] ?? 0) !== $connectionID) {
+                continue;
+            }
+            $configuration = json_decode(IPS_GetConfiguration($instanceID), true);
+            if (!is_array($configuration)) {
+                continue;
+            }
+            if ((int) ($configuration['Segment'] ?? -1) === $segment
+                && (int) ($configuration['Target'] ?? -1) === $target) {
+                $duplicates[] = $instanceID;
+            }
+        }
+        sort($duplicates);
+        return $duplicates;
+    }
+
+    private function getResolvedLcnAddresses(): array
+    {
+        $gt8UpSource = $this->findConnectedLcnModuleForVariable(
+            $this->ReadPropertyInteger('GT8LongUpVariableID'),
+            false
+        );
+        $gt8DownSource = $this->findConnectedLcnModuleForVariable(
+            $this->ReadPropertyInteger('GT8LongDownVariableID'),
+            false
+        );
+        return [
+            'sendModule' => $this->resolveLcnModuleAddress($this->ReadPropertyInteger('LCNSendModuleID')),
+            'actorModule' => $this->resolveLcnModuleAddress($this->ReadPropertyInteger('LCNActorModuleID')),
+            'gt8LongUpSource' => $this->resolveLcnModuleAddress($gt8UpSource),
+            'gt8LongDownSource' => $this->resolveLcnModuleAddress($gt8DownSource),
+        ];
+    }
+
+    private function validateSelectedLcnAddresses(): array
+    {
+        $messages = [];
+        $roles = [
+            'Sendemodul' => $this->ReadPropertyInteger('LCNSendModuleID'),
+            'Aktormodul' => $this->ReadPropertyInteger('LCNActorModuleID'),
+            'GT8-LANG-AUF-Quellmodul' => $this->findConnectedLcnModuleForVariable(
+                $this->ReadPropertyInteger('GT8LongUpVariableID'),
+                false
+            ),
+            'GT8-LANG-ZU-Quellmodul' => $this->findConnectedLcnModuleForVariable(
+                $this->ReadPropertyInteger('GT8LongDownVariableID'),
+                false
+            ),
+        ];
+
+        $checked = [];
+        foreach ($roles as $role => $instanceID) {
+            $instanceID = (int) $instanceID;
+            if ($instanceID <= 0 || isset($checked[$instanceID])) {
+                continue;
+            }
+            $checked[$instanceID] = true;
+            $address = $this->resolveLcnModuleAddress($instanceID);
+            if (!(bool) ($address['valid'] ?? false)) {
+                continue;
+            }
+            if (($address['nameMatchesAddress'] ?? null) === false) {
+                $messages[] = $role . ' #' . $instanceID . ' heißt „' . (string) ($address['instanceName'] ?? '')
+                    . '“ und nennt damit (' . (string) ($address['nameAddress'] ?? '') . '), ist intern aber auf ('
+                    . (string) ($address['address'] ?? '') . ') konfiguriert. Der Name ist nicht die Zieladresse; Segment/Target korrigieren.';
+            }
+            $duplicates = array_map('intval', (array) ($address['duplicateInstanceIDs'] ?? []));
+            if ($duplicates !== []) {
+                $labels = [];
+                foreach ($duplicates as $duplicateID) {
+                    $labels[] = IPS_GetName($duplicateID) . ' (#' . $duplicateID . ')';
+                }
+                $messages[] = $role . ' #' . $instanceID . ' und ' . implode(', ', $labels)
+                    . ' zeigen über denselben Splitter auf dieselbe reale LCN-Adresse ('
+                    . (string) ($address['address'] ?? '')
+                    . '). Doppelte LCN-Modulinstanzen sind für sichere TS-Zuordnung nicht zulässig.';
+            }
+        }
+        return array_values(array_unique($messages));
     }
 
     private function findBindingConflicts(): array
@@ -1689,6 +2002,8 @@ class LCNJalousie extends IPSModuleStrict
             $this->ReadPropertyInteger('GT8LongDownVariableID'),
         ], static fn (int $id): bool => $id > 0));
         $ownSendModule = $this->ReadPropertyInteger('LCNSendModuleID');
+        $ownSendAddress = $this->resolveLcnModuleAddress($ownSendModule);
+        $ownSendRouteKey = (string) ($ownSendAddress['routeKey'] ?? '');
         $ownCommands = array_values(array_filter([
             $this->ReadPropertyString('TSShortUp'),
             $this->ReadPropertyString('TSShortDown'),
@@ -1727,7 +2042,11 @@ class LCNJalousie extends IPSModuleStrict
             }
 
             $otherSendModule = (int) ($configuration['LCNSendModuleID'] ?? 0);
-            if ($ownSendModule > 0 && $otherSendModule === $ownSendModule) {
+            $otherSendAddress = $this->resolveLcnModuleAddress($otherSendModule);
+            $otherSendRouteKey = (string) ($otherSendAddress['routeKey'] ?? '');
+            if ($ownSendModule > 0
+                && ($otherSendModule === $ownSendModule
+                    || ($ownSendRouteKey !== '' && hash_equals($ownSendRouteKey, $otherSendRouteKey)))) {
                 $otherCommands = array_values(array_filter([
                     (string) ($configuration['TSShortUp'] ?? ''),
                     (string) ($configuration['TSShortDown'] ?? ''),
@@ -1735,7 +2054,7 @@ class LCNJalousie extends IPSModuleStrict
                 $sharedCommands = array_values(array_unique(array_intersect($ownCommands, $otherCommands)));
                 if ($sharedCommands !== []) {
                     $conflicts[] = 'TS-KURZ ' . implode(', ', $sharedCommands)
-                        . ' auf Sendemodul #' . $ownSendModule . ' wird auch von ' . $otherName
+                        . ' auf realer Senderoute ' . ($ownSendRouteKey !== '' ? $ownSendRouteKey : ('Instanz #' . $ownSendModule)) . ' wird auch von ' . $otherName
                         . ' verwendet. Diese Zuordnung kann nicht eindeutig nur eine Jalousie schalten.';
                 }
             }
@@ -1757,10 +2076,14 @@ class LCNJalousie extends IPSModuleStrict
             return false;
         }
         $instance = IPS_GetInstance($instanceID);
-        $moduleName = (string) ($instance['ModuleInfo']['ModuleName'] ?? '');
-        $moduleType = (int) ($instance['ModuleInfo']['ModuleType'] ?? -1);
-        return $moduleType === 2
-            && stripos($moduleName, 'LCN') !== false
+        $moduleInfo = (array) ($instance['ModuleInfo'] ?? []);
+        $moduleID = strtoupper((string) ($moduleInfo['ModuleID'] ?? ''));
+        $moduleName = (string) ($moduleInfo['ModuleName'] ?? '');
+        $moduleType = (int) ($moduleInfo['ModuleType'] ?? -1);
+        $isExactLcnModule = $moduleID !== ''
+            ? $moduleID === strtoupper(self::LCN_MODULE_ID)
+            : ($moduleType === 2 && preg_match('/^LCN Modul(?:e)?$/i', trim($moduleName)) === 1);
+        return $isExactLcnModule
             && (!$requireActiveStatus || (int) $instance['InstanceStatus'] === self::STATUS_ACTIVE);
     }
 
@@ -1918,6 +2241,43 @@ class LCNJalousie extends IPSModuleStrict
         if ($referencedCreated) {
             $this->SetValue('Referenziert', false);
         }
+    }
+
+    private function migrateLegacyStartConfirmationFault(string $previousVersion): void
+    {
+        if ($previousVersion === '' || version_compare($previousVersion, '0.1.25', '>=')) {
+            return;
+        }
+        if (!$this->ReadAttributeBoolean('FaultLatched')) {
+            return;
+        }
+
+        $message = trim($this->ReadAttributeString('FaultMessage'));
+        $legacyMessages = [
+            'Keine reale Relaisbestaetigung innerhalb der eingestellten Zeit.',
+            'Keine reale Relaisbestätigung innerhalb der eingestellten Zeit.',
+        ];
+        if (!in_array($message, $legacyMessages, true)) {
+            return;
+        }
+
+        $relayUpID = $this->ReadPropertyInteger('RelayUpVariableID');
+        $relayDownID = $this->ReadPropertyInteger('RelayDownVariableID');
+        if (!$this->isBooleanVariable($relayUpID)
+            || !$this->isBooleanVariable($relayDownID)
+            || GetValueBoolean($relayUpID)
+            || GetValueBoolean($relayDownID)) {
+            return;
+        }
+
+        // Diese alte Meldung beschrieb lediglich eine ausgebliebene
+        // Startbestätigung bei nachweislich stromlosen Relais. Ab 0.1.25 ist
+        // dies kein verriegelnder Motorfehler mehr. Eine eventuell bereits
+        // ungültige Referenz wird aus Sicherheitsgründen nicht automatisch
+        // wiederhergestellt.
+        $this->WriteAttributeBoolean('FaultLatched', false);
+        $this->WriteAttributeString('FaultMessage', '');
+        $this->setFaultStateVariable(false);
     }
 
     private function applySafetyMigration(int $controlCategoryID, int $stateCategoryID, string $previousVersion): void
@@ -2348,10 +2708,10 @@ class LCNJalousie extends IPSModuleStrict
     private function ensureRuntimeScripts(int $scriptsCategoryID): void
     {
         $scripts = [
-            'Controller' => ['10 Controller V11.7', 20, 'Controller.php'],
-            'Worker' => ['20 Worker V11.7', 30, 'Worker.php'],
-            'Healthcheck' => ['30 Healthcheck V11.7', 40, 'Healthcheck.php'],
-            'Diagnose' => ['90 Diagnose V11.7', 90, 'Diagnose.php'],
+            'Controller' => ['10 Controller V11.9', 20, 'Controller.php'],
+            'Worker' => ['20 Worker V11.9', 30, 'Worker.php'],
+            'Healthcheck' => ['30 Healthcheck V11.9', 40, 'Healthcheck.php'],
+            'Diagnose' => ['90 Diagnose V11.9', 90, 'Diagnose.php'],
         ];
         foreach ($scripts as $ident => [$name, $position, $file]) {
             $path = __DIR__ . '/scripts/' . $file;
@@ -2417,6 +2777,79 @@ class LCNJalousie extends IPSModuleStrict
         ];
         foreach ($links as [$ident, $name, $target, $position]) {
             $this->link($visualizationID, $ident, $name, $target, $position);
+        }
+    }
+
+    private function suspendRuntimeForApplyChanges(): void
+    {
+        $this->WriteAttributeBoolean('RuntimeEnabled', false);
+        $scriptsCategoryID = @IPS_GetObjectIDByIdent('06_Skripte', $this->InstanceID);
+        if ($scriptsCategoryID === false) {
+            return;
+        }
+
+        $controllerID = @IPS_GetObjectIDByIdent('Controller', (int) $scriptsCategoryID);
+        if ($controllerID !== false && IPS_ScriptExists((int) $controllerID)) {
+            foreach (['Evt_Relais_AUF', 'Evt_Relais_AB', 'Evt_GT8_LANG_AUF', 'Evt_GT8_LANG_AB'] as $ident) {
+                $eventID = @IPS_GetObjectIDByIdent($ident, (int) $controllerID);
+                if ($eventID !== false && IPS_EventExists((int) $eventID)) {
+                    @IPS_SetEventActive((int) $eventID, false);
+                }
+            }
+        }
+
+        foreach (['Worker', 'Healthcheck'] as $ident) {
+            $scriptID = @IPS_GetObjectIDByIdent($ident, (int) $scriptsCategoryID);
+            if ($scriptID !== false && IPS_ScriptExists((int) $scriptID)) {
+                @IPS_SetScriptTimer((int) $scriptID, 0);
+            }
+        }
+    }
+
+    private function autoRecoverTransientMaintenanceFault(array $validation): void
+    {
+        if (!$this->ReadAttributeBoolean('FaultLatched')
+            || (int) ($validation['status'] ?? 0) !== self::STATUS_ACTIVE) {
+            return;
+        }
+
+        $relayUpID = $this->ReadPropertyInteger('RelayUpVariableID');
+        $relayDownID = $this->ReadPropertyInteger('RelayDownVariableID');
+        if (!$this->isBooleanVariable($relayUpID)
+            || !$this->isBooleanVariable($relayDownID)
+            || GetValueBoolean($relayUpID)
+            || GetValueBoolean($relayDownID)) {
+            return;
+        }
+
+        $message = trim($this->ReadAttributeString('FaultMessage'));
+        $transient = $message !== '' && (
+            str_starts_with($message, 'Aufbaufehler:')
+            || str_contains($message, 'Die sichere Hardwarebindung des Moduls ist nicht verfügbar')
+            || str_contains($message, 'Die sichere Hardwarebindung ist ungültig')
+            || str_contains($message, 'Sichere richtungsgebundene Befehlsfunktion fehlt')
+            || str_contains($message, 'Statusabgleich ohne aktuelle OnUpdate-Rueckmeldung')
+            || str_contains($message, 'Statusabgleich ohne aktuelle OnUpdate-Rückmeldung')
+            || str_contains($message, 'LCN_RequestStatus ist in diesem Symcon-Kernel nicht registriert')
+        );
+        if (!$transient) {
+            return;
+        }
+
+        $this->WriteAttributeBoolean('FaultLatched', false);
+        $this->WriteAttributeString('FaultMessage', '');
+        $this->setFaultStateVariable(false);
+
+        $stateCategoryID = @IPS_GetObjectIDByIdent('04_Istwerte', $this->InstanceID);
+        if ($stateCategoryID !== false) {
+            $faultTextID = @IPS_GetObjectIDByIdent('Fehlertext', (int) $stateCategoryID);
+            if ($faultTextID !== false && IPS_VariableExists((int) $faultTextID)) {
+                SetValueString((int) $faultTextID, '');
+            }
+            $lastActionID = @IPS_GetObjectIDByIdent('Letzte_Aktion', (int) $stateCategoryID);
+            if ($lastActionID !== false && IPS_VariableExists((int) $lastActionID)) {
+                SetValueString((int) $lastActionID, date('d.m.Y H:i:s') . ' - Transiente Updateverriegelung automatisch aufgehoben');
+            }
         }
     }
 

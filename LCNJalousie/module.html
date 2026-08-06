@@ -710,6 +710,13 @@
     };
 
     let jalPendingCommand = null;
+    let jalActionInFlight = false;
+    let jalActionTimeout = 0;
+    let jalLastActionTimestamp = 0;
+    let jalActionGeneration = 0;
+
+    const JAL_ACTION_TIMEOUT_MS = 8000;
+    const JAL_ACTION_GUARD_MS = 350;
 
     const byId = (id) => document.getElementById(id);
     const clamp = (value) => Math.max(0, Math.min(100, Number(value) || 0));
@@ -723,6 +730,19 @@
             }
             jalState = {...jalState, ...decoded};
 
+            // Eine Servernachricht löst die lokale Sendesperre erst nach
+            // eindeutiger Auftragsübernahme oder nach dem kurzen UI-Schutzfenster.
+            // Dadurch kann eine bereits unterwegs gewesene Statusnachricht keinen
+            // zweiten schnellen Tastendruck freigeben.
+            const pendingAge = jalPendingCommand ? Date.now() - jalPendingCommand.time : 0;
+            if (jalActionInFlight && (
+                !jalPendingCommand
+                || Boolean(jalState.commandActive)
+                || pendingAge > 650
+            )) {
+                clearActionInFlight(false);
+            }
+
             // Sobald der Server den Auftrag übernommen hat, ist der lokale
             // Sofortindikator nicht mehr erforderlich. Nach Auftragsende
             // (commandActive=false) wird der Kranz ebenfalls sicher entfernt.
@@ -734,8 +754,58 @@
 
             renderJalousie();
         } catch (error) {
-            showLocalWarning(`Visualisierungsdaten ungültig: ${error.message}`);
+            showLocalWarning(`Visualisierungsdaten ungültig: ${clientErrorText(error)}`);
         }
+    }
+
+    function clientErrorText(error) {
+        if (error && typeof error === 'object' && typeof error.message === 'string') {
+            return error.message;
+        }
+        return String(error || 'Unbekannter Kommunikationsfehler');
+    }
+
+    function isTransientApiError(error) {
+        const text = clientErrorText(error).toLowerCase();
+        return text.includes('failed to fetch')
+            || text.includes('uri=/api/')
+            || text.includes('networkerror')
+            || text.includes('network request failed')
+            || text.includes('load failed');
+    }
+
+    function clearActionInFlight(render = true) {
+        jalActionGeneration += 1;
+        jalActionInFlight = false;
+        if (jalActionTimeout) {
+            window.clearTimeout(jalActionTimeout);
+            jalActionTimeout = 0;
+        }
+        if (render) {
+            renderJalousie();
+        }
+    }
+
+    function failVisualizationTransport(error) {
+        clearActionInFlight(false);
+        jalPendingCommand = null;
+        renderJalousie();
+        showLocalWarning(
+            `Verbindung zu Symcon unterbrochen: ${clientErrorText(error)}. `
+            + 'Der Befehl wird nicht automatisch wiederholt. Bitte den tatsächlichen Relaiszustand prüfen.'
+        );
+    }
+
+    function armActionTimeout(generation) {
+        if (jalActionTimeout) {
+            window.clearTimeout(jalActionTimeout);
+        }
+        jalActionTimeout = window.setTimeout(() => {
+            if (!jalActionInFlight || generation !== jalActionGeneration) {
+                return;
+            }
+            failVisualizationTransport('Keine Rückmeldung der Symcon-API innerhalb von 8 Sekunden');
+        }, JAL_ACTION_TIMEOUT_MS);
     }
 
     function sendJalousieAction(ident, value) {
@@ -744,19 +814,42 @@
             return;
         }
 
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+            showLocalWarning('Keine Netzwerkverbindung. Es wurde kein Befehl an Symcon gesendet.');
+            return;
+        }
+
+        const now = Date.now();
+        if (jalActionInFlight && ident !== 'Stop') {
+            showLocalWarning('Ein Bedienbefehl wird bereits an Symcon übertragen. Bitte den Relaiszustand abwarten.');
+            return;
+        }
+        if (ident !== 'Stop' && now - jalLastActionTimestamp < JAL_ACTION_GUARD_MS) {
+            return;
+        }
+
+        jalLastActionTimestamp = now;
+        jalActionInFlight = true;
+        jalActionGeneration += 1;
+        const generation = jalActionGeneration;
         jalPendingCommand = {
             ident,
             value: Number.isFinite(Number(value)) ? Number(value) : value,
-            time: Date.now()
+            time: now
         };
-        renderCommandFeedback();
+        renderJalousie();
+        armActionTimeout(generation);
 
         try {
-            requestAction(ident, value);
+            // Laut HTML-SDK ist requestAction ohne Rückgabewert definiert.
+            // Einige Clients liefern intern dennoch ein Thenable. Dieses wird
+            // defensiv behandelt, ohne einen fehlgeschlagenen Toggle erneut zu senden.
+            const result = requestAction(ident, value);
+            if (result && typeof result.then === 'function') {
+                result.catch((error) => failVisualizationTransport(error));
+            }
         } catch (error) {
-            jalPendingCommand = null;
-            renderCommandFeedback();
-            showLocalWarning(`Aktion konnte nicht gesendet werden: ${error.message}`);
+            failVisualizationTransport(error);
         }
     }
 
@@ -822,9 +915,9 @@
         const position = clamp(jalState.position);
         const rotation = clamp(jalState.rotation);
         const active = Boolean(jalState.active);
-        const controlsEnabled = Boolean(jalState.controlsEnabled);
+        const controlsEnabled = Boolean(jalState.controlsEnabled) && !jalActionInFlight;
         const referenced = Boolean(jalState.referenced);
-        const intermediateAllowed = Boolean(jalState.intermediateAllowed);
+        const intermediateAllowed = Boolean(jalState.intermediateAllowed) && !jalActionInFlight;
 
         const positionSlider = byId('jal-position');
         positionSlider.value = String(Math.round(position));
@@ -848,7 +941,7 @@
 
         const shakeSwitch = byId('jal-shakefree');
         shakeSwitch.checked = Boolean(jalState.shakeFree);
-        shakeSwitch.disabled = !Boolean(jalState.shakeFreeToggleEnabled);
+        shakeSwitch.disabled = !Boolean(jalState.shakeFreeToggleEnabled) || jalActionInFlight;
         byId('jal-shakefree-text').textContent = shakeSwitch.checked ? 'Ein' : 'Aus';
 
         const statusKey = jalState.statusKey || 'stopped';
@@ -927,6 +1020,34 @@
 
     byId('jal-reset-error').addEventListener('click', () => {
         sendJalousieAction('ResetError', true);
+    });
+
+    // Verbindungsfehler des vom Symcon-Client bereitgestellten HTML-SDK treten
+    // je nach Client asynchron auf. Ohne diesen Handler erscheint ein roher
+    // ClientException-Dialog, obwohl die Kachel den Zustand sicher behandeln kann.
+    window.addEventListener('unhandledrejection', (event) => {
+        if (!isTransientApiError(event.reason)) {
+            return;
+        }
+        event.preventDefault();
+        failVisualizationTransport(event.reason);
+    });
+
+    window.addEventListener('error', (event) => {
+        const error = event.error || event.message;
+        if (!isTransientApiError(error)) {
+            return;
+        }
+        event.preventDefault();
+        failVisualizationTransport(error);
+    });
+
+    window.addEventListener('offline', () => {
+        failVisualizationTransport('Netzwerkverbindung unterbrochen');
+    });
+
+    window.addEventListener('online', () => {
+        showLocalWarning('Verbindung wiederhergestellt. Vor einem neuen Befehl bitte den Relaiszustand prüfen.');
     });
 
     renderJalousie();

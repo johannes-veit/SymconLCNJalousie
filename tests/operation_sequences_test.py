@@ -217,37 +217,90 @@ assert_order(external_reference, 'J_SetReference(', 'Externer_Autostopp_bis_ms',
 external_stop = function_body(CONTROLLER, 'J_HandleExternalEndStop', 'J_SendExternalEndStop')
 assert_order(external_stop, "J_NowMs() < $deadline", 'J_SendExternalEndStop($rootID, $state)', 'calibration before external STOP')
 
-# 21-24: Every unconfirmed toggle command owns a cross-instance lease. The
-# lease is cleared by the real start/stop feedback, so already confirmed motors
-# may continue moving while the next instance starts.
+# Routine updates may finish a status sync without fresh OnUpdate events
+# when both selected motor relays are already safely OFF. This must preserve a
+# valid reference and avoid a global acknowledgement storm after updates.
+status_sync = function_body(CONTROLLER, 'J_CompleteStatusSync', 'J_InitializeRuntime')
+for required in [
+    'if ($currentState === J_DIR_NONE)',
+    'gespeicherte Referenz ohne manuelle Quittierung übernommen',
+    'vorhandener unreferenzierter Zustand übernommen',
+]:
+    if required not in status_sync:
+        raise AssertionError(f'safe update status fallback missing: {required}')
+
+# 21-24: Every unconfirmed toggle command owns a correlation lease, but an
+# open lease from another instance must no longer block the next telegram. The
+# global send semaphore and a hard minimum spacing protect the LCN bus while
+# several motors may start and then run in parallel.
 for required in [
     'CommandLeaseActive',
-    'waitForOtherCommandLease(15000)',
     'markCommandLeaseState($direction, $expectedRelayState)',
     'clearCommandLeaseState()',
     'ForeignRelayResponse',
     'startedMs > $nowMs + 1000.0',
+    "'LCNJAL_LCN_BUS_SEND'",
+    "max(100, min(1000, $this->ReadPropertyInteger('CommandSpacingMs')))",
 ]:
     if required not in MODULE:
-        raise AssertionError(f'command transaction isolation missing: {required}')
-assert_order(send_command, 'waitForOtherCommandLease(15000)', 'LCN_SendCommand($sendModuleID', 'lease wait before telegram')
-assert_order(real_start, 'J_ClearCommandLease($rootID);', 'SetValueFloat(J_ID($rootID, \'05_Intern\', \'Zielzeit_ms\')', 'lease release after real start')
+        raise AssertionError(f'parallel command safety missing: {required}')
+if 'waitForOtherCommandLease(15000)' in send_command:
+    raise AssertionError('a foreign unconfirmed start must not synchronously block the next blind command')
+assert_order(send_command, 'markCommandLeaseState($direction, $expectedRelayState)', 'LCN_SendCommand($sendModuleID', 'lease marker before telegram')
+assert_order(real_start, 'J_ClearCommandLease($rootID);', "SetValueFloat(J_ID($rootID, '05_Intern', 'Zielzeit_ms')", 'lease release after real start')
 if 'J_ClearCommandLease($rootID);' not in real_stop:
     raise AssertionError('real relay-off confirmation must clear command lease')
 
-# 25-27: A relay response in another instance is correlated with the single
-# active start lease. The sender is faulted with an explicit TS-routing message,
-# while the receiver remains under external/end-stop supervision.
+# 25-31: A relay response in another instance is correlated with the single
+# active start lease. It is only promoted to a hard routing fault after a fresh
+# status request has confirmed both selected sender relays are still OFF.
 for required in [
     'J_ReportPossibleForeignCommand',
     'LCNJAL_ReportForeignRelayResponse',
-    'TS-Routing stimmt nicht mit der Instanzzuordnung überein',
+    'J_HandleForeignRelayResponse',
+    'LCNJAL_BlockCurrentRouting',
+    'TS-Routingfehler bestätigt:',
+    'correlationCandidate',
+    'Startstatus_Relais_AUF_Empfangen',
+    'Startstatus_Relais_AB_Empfangen',
+    'J_HandleForeignRelayResponse($rootID, $order, true)',
     'Routing wird beim Sender geprüft',
 ]:
     if required not in CONTROLLER:
         raise AssertionError(f'cross-instance routing detection missing: {required}')
 
-# 28-29: Worker and healthcheck independently execute both external deadlines.
+if "case 'FOREIGN_RESPONSE':" in CONTROLLER or "'FOREIGN_RESPONSE'" in WORKER:
+    raise AssertionError('a temporal foreign response must not cause an immediate hard fault before fresh sender status')
+if 'BlockedRoutingFingerprint' not in MODULE or 'routingIsBlocked()' not in MODULE:
+    raise AssertionError('a physically disproved send-module/TS combination must remain blocked')
+
+start_timeout = function_body(CONTROLLER, 'J_HandleStartTimeout', 'J_HandleStopTimeout')
+for required in [
+    'zweite passive Bestätigungsfrist läuft',
+    'Startstatus_Nachfrage_Aktiv',
+    'Positionsreferenz unverändert',
+]:
+    if required not in start_timeout:
+        raise AssertionError(f'stable two-window start confirmation missing: {required}')
+if 'J_SetError(' in start_timeout.split('J_HandleForeignRelayResponse($rootID, $order, true)', 1)[-1]:
+    raise AssertionError('plain missing start confirmation must not latch a permanent fault')
+
+for required in [
+    'private const LCN_MODULE_ID',
+    'resolveLcnModuleAddress',
+    'findDuplicateLcnAddressInstances',
+    'validateSelectedLcnAddresses',
+    'nameMatchesAddress',
+    'duplicateInstanceIDs',
+    "'sendRouteKey'",
+]:
+    if required not in MODULE:
+        raise AssertionError(f'physical LCN address validation missing: {required}')
+
+if 'if ($this->routingIsBlocked())' not in send_command:
+    raise AssertionError('a blocked route must also prevent fault-latched external end-stop toggles')
+
+# 30-31: Worker and healthcheck independently execute both external deadlines.
 healthcheck = function_body(CONTROLLER, 'J_RunHealthcheck', 'J_StatusText')
 for required in [
     'J_HandleExternalReferenceDeadline($rootID, $order)',
@@ -256,10 +309,22 @@ for required in [
     if required not in healthcheck:
         raise AssertionError(f'external healthcheck fallback missing: {required}')
 
-# 30-31: Fault latching, runtime disable and error acknowledgement do not erase
+# 32-35: Fault latching, runtime disable and error acknowledgement do not erase
 # a still-valid persistent reference. Only explicit uncertainty paths may call
 # InvalidateReference.
 apply_changes = function_body(MODULE, 'ApplyChanges', 'MessageSink')
+for required in [
+    "SetBuffer('MaintenanceActive', '1')",
+    'suspendRuntimeForApplyChanges()',
+    'autoRecoverTransientMaintenanceFault($validation)',
+    "SetBuffer('MaintenanceActive', '0')",
+]:
+    if required not in apply_changes:
+        raise AssertionError(f'update maintenance protection missing: {required}')
+if 'private function autoRecoverTransientMaintenanceFault' not in MODULE:
+    raise AssertionError('transient update faults must be recoverable without manual acknowledgement')
+if 'private function suspendRuntimeForApplyChanges' not in MODULE:
+    raise AssertionError('runtime events must be suspended while scripts are rebuilt')
 if 'invalidateReferenceWithoutCommand' in apply_changes:
     raise AssertionError('ApplyChanges/runtime disable must preserve a valid reference')
 latch_fault = function_body(MODULE, 'LatchFault', 'StoreReference')

@@ -1,7 +1,7 @@
 <?php
 /**
  * Jalousiesteuerung LCN / IP-Symcon 9.0
- * V11.7 - Neustart-/Gesundheitspruefung
+ * V11.9 - Neustart-/Gesundheitspruefung
  *
  * Der ScriptTimer bleibt zyklisch aktiv. Der Controller erkennt damit einen
  * Kernelneustart auch dann, wenn die Jalousie im Stillstand war.

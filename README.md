@@ -57,9 +57,9 @@ Eine ausführliche Anleitung steht in [ERSTE_SCHRITTE.md](ERSTE_SCHRITTE.md).
 
 ## Entwicklungsstand
 
-**0.1.23 – öffentliche Beta.** Der Runtime-Kern basiert auf der tiefengeprüften V11.3-Skriptfassung. Das Modul automatisiert deren Aufbau und Konfiguration. Vor einem produktiven Motorbetrieb bleiben reale Tests mit Symcon 9.0, PCHK/PCK, LCN-Bus, Relais, Motor und Endlagen zwingend.
+**0.1.25 – öffentliche Beta.** Der Runtime-Kern basiert auf der tiefengeprüften V11.3-Skriptfassung. Das Modul automatisiert deren Aufbau und Konfiguration. Vor einem produktiven Motorbetrieb bleiben reale Tests mit Symcon 9.0, PCHK/PCK, LCN-Bus, Relais, Motor und Endlagen zwingend.
 
-## Relaisbestätigung und parallele Bedienung ab Version 0.1.23
+## Relaisbestätigung und parallele Bedienung ab Version 0.1.25
 
 Die Bestätigungszeit beginnt erst, wenn Symcon das jeweilige LCN-Telegramm tatsächlich angenommen hat. Konfigurationsprüfung, Warten auf die globale Bus-Sendesperre und der einstellbare Telegrammabstand verbrauchen daher keine Bestätigungszeit mehr. Das verhindert insbesondere bei vielen gleichzeitig eingebundenen Jalousien falsche sofortige Startfehler.
 
@@ -68,14 +68,30 @@ Bleibt die erwartete Relaismeldung aus, fragt das Modul das konfigurierte Aktorm
 Alle Instanzen teilen eine globale LCN-Sendesperre und eine kurze Transaktionssperre für noch nicht real bestätigte Toggle-Befehle. Sobald das Relais der ersten Instanz den Start oder STOP bestätigt, wird die Transaktionssperre gelöst; bereits gestartete unterschiedliche Jalousien dürfen daher gleichzeitig weiterfahren. Doppelt verwendete Motorrelais-, GT8- und identische TS-KURZ-Zuordnungen werden bereits bei der Konfiguration gesperrt. Startet nach einem Symcon-Telegramm dennoch das Relais einer anderen Instanz, wird der Sender mit einer eindeutigen TS-Routingmeldung verriegelt und die tatsächlich fahrende Jalousie sicher als externe Fahrt überwacht. Die Software kann eine falsche LCN-PRO-Zuordnung nicht vor dem ersten realen Telegramm erkennen; deshalb bleibt die Busmonitor-Abnahme jeder AUF-/ZU-Zuordnung zwingend.
 
 
-## Externe Endlagen, Referenz und Mehrinstanzbetrieb ab Version 0.1.23
+## Externe Endlagen, Referenz und Mehrinstanzbetrieb ab Version 0.1.25
 
 - Eine gültige Referenz bleibt beim Start einer neuen Fahrt aktiv; die Position wird während der Fahrt weitergerechnet.
 - LCN-/GT8-Bedienung hat gegenüber gleichzeitig eintreffenden Visualisierungszielen Vorrang. Symcon übernimmt eine erkannte externe Fahrt nicht als eigenen Zwischenzielauftrag.
 - Nach sicherer Endlagenzeit wird 0 % beziehungsweise 100 % automatisch referenziert. Das externe Relais bleibt noch bis zum Ablauf des konfigurierten Kalibrierfensters aktiv und wird danach genau einmal über den KURZ-Befehl seiner real bestätigten Richtung ausgeschaltet.
 - Worker und Healthcheck prüfen diese beiden Deadlines unabhängig voneinander.
-- Nur unbestätigte Toggle-Telegramme werden instanzübergreifend serialisiert. Nach realer Startbestätigung dürfen beliebig viele korrekt getrennte Jalousieinstanzen gleichzeitig fahren.
+- Ab Version 0.1.27 wird nur noch der kurze Telegrammversand global serialisiert. Zwischen zwei Telegrammen liegen mindestens 100 ms; offene Relaisbestätigungen anderer Instanzen blockieren den nächsten Start nicht. Mehrere korrekt getrennte Jalousien dürfen daher innerhalb weniger Sekunden gestartet werden und anschließend gleichzeitig fahren.
 - Meldet während einer offenen Symcon-Transaktion ausschließlich eine andere Jalousie ein aktives Relais, wird der Sender mit einem TS-Routingfehler gesperrt. Die fahrende Instanz bleibt unter Endlagen-/Autostopp-Überwachung.
+
+
+
+## Modulupdate, Fehlerquittierung und Referenzerhalt ab Version 0.1.27
+
+Während eines Modulupdates werden die alten Laufzeitereignisse und Timer vor dem Skriptneuaufbau kurz angehalten. Dadurch kann kein Relaisereignis einen Controller gegen eine nur teilweise aktualisierte Modulfunktion ausführen. Nach erfolgreichem Aufbau werden Konfiguration und reale Relaiswerte automatisch neu geprüft.
+
+Reine Update-/Initialisierungsfehler werden automatisch aufgehoben, wenn beide ausgewählten Motorrelais AUS sind und die vollständige Prüfung wieder erfolgreich ist. Eine manuelle Quittierung bleibt bewusst erforderlich bei echten Sicherheitsfehlern, insbesondere bei weiterhin aktivem Relais nach STOP, gleichzeitig aktiven Richtungsrelais oder bestätigtem TS-Routingfehler.
+
+Eine gültige Referenz und die aktuelle Zwischenposition sind persistent und werden bei einem normalen Update übernommen. Auch eine Fehlerquittierung allein löscht sie nicht. Eine neue Endlagenreferenz ist nur erforderlich, wenn die Referenz bereits vorher ungültig war, ein altes inkompatibles Positionsmodell migriert wird oder ein Bewegungsbeginn/-verlauf tatsächlich nicht sicher zeitlich bestimmt werden konnte. Eine in einer älteren Version bereits gelöschte Referenz wird nicht künstlich aus einem möglicherweise veralteten Prozentwert rekonstruiert.
+
+## Reale LCN-Adressen ab Version 0.1.25
+
+Das Modul zeigt für Sendemodul, Aktormodul und GT8-Quellmodule die tatsächlich in Symcon gespeicherten Werte `Segment` und `Target` an. Ein Name wie `EG Büro Säule (000,011)` ist nur eine Beschriftung; gesendet wird an die interne Adresse. Stimmen Name und Adresse nicht überein oder existieren zwei aktive LCN-Modulinstanzen mit derselben realen Adresse am selben Splitter, wird die Jalousiesteuerung vor dem ersten Telegramm gesperrt.
+
+Bei ausbleibender Startmeldung stehen nun zwei vollständige Bestätigungsfenster zur Verfügung. Bleiben beide ausgewählten Relais AUS, wird nur der Auftrag verworfen; die Instanz und eine vorhandene Referenz bleiben erhalten. Eine dauerhafte TS-Routingsperre erfolgt erst nach einer frischen Statusbestätigung der ausgewählten Relais.
 
 ## Lizenz
 
@@ -84,9 +100,11 @@ MIT – siehe [LICENSE](LICENSE).
 
 Ab Version 0.1.11 nutzt die Geräteinstanz das offizielle Symcon HTML-SDK für eine eigene, interaktive Jalousiekachel. Behang und Lamellen sind identisch aufgebaut: links drei gleich große runde Tasten, mittig eine dynamische grafische Statusanzeige und rechts ein vertikaler Slider. Beim Behang lauten die Tasten `AUF`, `STOP`, `ZU`; bei den Lamellen `AUF`, `MITTE`, `ZU`. Beide Slider zeigen 0 % oben und 100 % unten. Der kompakte Laufstatus und der Schalter **ShakeFree nach Endlage ZU** bleiben sichtbar. Der optische Tastenkranz kennzeichnet nur einen laufenden Auftrag und verschwindet nach dessen Abschluss automatisch. Die Kachel verwendet Symcon-Icons über `/icons.js`, übernimmt Akzent-, Text- und Kartenfarbe direkt aus der geöffneten Symcon-Visualisierung und sendet Benutzeraktionen ausschließlich über `requestAction()` an die Modulinstanz.
 
+Ab Version 0.1.26 behandelt die Kachel vorübergehende API-Verbindungsabbrüche defensiv. Während ein Bedienbefehl noch keine Serverrückmeldung erhalten hat, werden weitere Nicht-STOP-Befehle kurz gesperrt. Ein unklar übertragener LCN-Toggle wird niemals automatisch wiederholt. Nach einem Fehler fordert die Kachel stattdessen zur Kontrolle des realen Relaiszustands auf. Damit werden schnelle Doppelklicks und unkontrollierte Wiederholungen bei `ClientException: Failed to fetch, uri=/api/` vermieden; die Erreichbarkeit des Symcon-Servers selbst kann das Modul jedoch nicht herstellen.
+
 Die direkten Statusvariablen `Position`, `Drehgrad` und `Position gültig` bleiben erhalten, damit die Werte auch in der Listenansicht und für Automationen verfügbar sind. `Position` verwendet 0 % = vollständig offen und 100 % = vollständig geschlossen; `Drehgrad` verwendet 0 % in AUF-Richtung und 100 % in AB-Richtung.
 
-Ab Version 0.1.15 wird eine gültige Endlagenreferenz doppelt persistent gespeichert: als sichtbare Statusvariable und zusätzlich als Modulattribut. Version 0.1.23 trennt dabei die zuletzt sicher erreichte Referenz-Endlage von der aktuellen Zwischenposition. Ein normales **Übernehmen**, ein Objektbaum-Rebuild, ein Neustart, eine Fehlerverriegelung oder eine Fehlerquittierung löscht die Referenz nicht und setzt die Positionsanzeige nicht auf die letzte Endlage zurück. Die Diagnosevariablen `Letzte Referenz-Endlage` und `Letzte Referenzierung` zeigen den letzten sicheren Abgleich. Eine Referenz wird nur noch bei einem ausdrücklich inkompatiblen Modellupdate oder einem nachweislich positionsunsicheren Bewegungsablauf verworfen.
+Ab Version 0.1.15 wird eine gültige Endlagenreferenz doppelt persistent gespeichert: als sichtbare Statusvariable und zusätzlich als Modulattribut. Version 0.1.24 trennt dabei die zuletzt sicher erreichte Referenz-Endlage von der aktuellen Zwischenposition. Ein normales **Übernehmen**, ein Objektbaum-Rebuild, ein Neustart, eine Fehlerverriegelung oder eine Fehlerquittierung löscht die Referenz nicht und setzt die Positionsanzeige nicht auf die letzte Endlage zurück. Die Diagnosevariablen `Letzte Referenz-Endlage` und `Letzte Referenzierung` zeigen den letzten sicheren Abgleich. Eine Referenz wird nur noch bei einem ausdrücklich inkompatiblen Modellupdate oder einem nachweislich positionsunsicheren Bewegungsablauf verworfen.
 
 Ist `Position gültig` noch `false`, wird der erste Symcon-Endlagenauftrag auf 0 % oder 100 % automatisch als vollständige Referenzfahrt ausgeführt. Die Dauer ist richtungsspezifisch: Gesamtzeit 100→0 beziehungsweise 0→100 plus Referenzreserve, begrenzt durch `MaxFahrt`. Nach Ablauf der Reserve sendet das Modul genau einmal den richtungsabhängigen STOP und wartet auf die reale AUS-Bestätigung beider ausgewählter Relais. Externe LCN-/GT8-Fahrten werden ebenfalls verfolgt: Nach sicherer Endlagenzeit wird die Referenz aktualisiert; bleibt das Relais anschließend noch aktiv, wird es erst nach Ablauf des Kalibrierfensters mit genau einem richtungsgebundenen KURZ-Befehl ausgeschaltet und auf reale AUS-Bestätigung überwacht.
 

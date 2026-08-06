@@ -1,7 +1,7 @@
 <?php
 /**
  * Jalousiesteuerung LCN / IP-Symcon 9.0
- * V11.7 - Diagnose, Kompatibilitaets- und Installationspruefung
+ * V11.9 - Diagnose, Kompatibilitaets- und Installationspruefung
  *
  * Die Diagnose prueft die formale Symcon-/LCN-Konfiguration. Sie ersetzt
  * keine reale Inbetriebnahme mit Motor, Relaisrueckmeldung und LCN-Busmonitor.
@@ -390,8 +390,8 @@ if ($errors === []) {
     foreach (['Controller' => $controllerID, 'Worker' => $workerID, 'Healthcheck' => $healthID, 'Diagnose' => $diagnoseID] as $name => $id) {
         if ($id === false || !IPS_ScriptExists((int) $id)) {
             JD_Add($errors, $name . '-Skript fehlt oder hat falschen Objekttyp.');
-        } elseif (strpos(IPS_GetScriptContent((int) $id), 'V11.7') === false) {
-            JD_Add($warnings, $name . '-Skript enthaelt keine V11.7-Kennung. Skriptstand pruefen.');
+        } elseif (strpos(IPS_GetScriptContent((int) $id), 'V11.9') === false) {
+            JD_Add($warnings, $name . '-Skript enthaelt keine V11.9-Kennung. Skriptstand pruefen.');
         }
     }
 
@@ -485,7 +485,7 @@ if ($errors === []) {
             'Stopstatus_Nachfrage_Aktiv' => 'einmalige Stoppstatus-Nachfrage',
         ] as $needle => $description) {
             if (strpos($controllerContent, $needle) === false) {
-                JD_Add($errors, 'Controller enthaelt nicht die erwartete V11.7-Sicherheitsfunktion: ' . $description . '.');
+                JD_Add($errors, 'Controller enthaelt nicht die erwartete V11.9-Sicherheitsfunktion: ' . $description . '.');
             }
         }
     }
@@ -512,7 +512,7 @@ if ($errors === []) {
 }
 
 $out = [];
-$out[] = 'DIAGNOSE JALOUSIE V11.7 - SYMCON 9.0 / PHP 8.5';
+$out[] = 'DIAGNOSE JALOUSIE V11.9 - SYMCON 9.0 / PHP 8.5';
 $out[] = 'Objekt: ' . IPS_GetLocation($rootID) . ' (ID ' . $rootID . ')';
 $out[] = str_repeat('=', 84);
 $out[] = '';

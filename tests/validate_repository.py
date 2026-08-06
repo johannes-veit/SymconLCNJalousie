@@ -64,6 +64,8 @@ def check_php() -> None:
     php_regressions = [
         ('restart_lifecycle_test.php', 'RESTART LIFECYCLE TEST OK'),
         ('relay_command_state_test.php', 'RELAY COMMAND STATE TEST OK'),
+        ('lcn_address_validation_test.php', 'LCN ADDRESS VALIDATION TEST OK'),
+        ('start_confirmation_migration_test.php', 'START CONFIRMATION MIGRATION TEST OK'),
     ]
     for filename, success_text in php_regressions:
         test_path = ROOT / 'tests' / filename
@@ -88,6 +90,22 @@ def check_php() -> None:
                 f'{result.stdout}{result.stderr}'
             )
 
+
+    visualization_test = ROOT / 'tests' / 'visualization_transport_test.js'
+    if not visualization_test.is_file():
+        ERRORS.append('missing regression test: tests/visualization_transport_test.js')
+    else:
+        try:
+            subprocess.run(['node', '--version'], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            print('NOTICE: Node.js not available; visualization transport regression skipped.')
+        else:
+            result = subprocess.run(['node', str(visualization_test)], capture_output=True, text=True)
+            if result.returncode != 0 or 'VISUALIZATION TRANSPORT TEST OK' not in result.stdout:
+                ERRORS.append(
+                    f'{visualization_test.relative_to(ROOT)}: visualization transport test failed: '
+                    f'{result.stdout}{result.stderr}'
+                )
 
     interaction_test = ROOT / 'tests' / 'interaction_matrix_test.py'
     if not interaction_test.is_file():
@@ -1045,6 +1063,47 @@ def check_restart_validation_lifecycle() -> None:
             f'{healthcheck_path.relative_to(ROOT)}: startup validation must run before the controller healthcheck'
         )
 
+
+
+def check_visualization_transport_resilience() -> None:
+    html_path = ROOT / 'LCNJalousie' / 'module.html'
+    if not html_path.is_file():
+        return
+    html = html_path.read_text(encoding='utf-8')
+    required = [
+        'let jalActionInFlight = false;',
+        'const JAL_ACTION_TIMEOUT_MS = 8000;',
+        'const JAL_ACTION_GUARD_MS = 350;',
+        'function isTransientApiError(error)',
+        "text.includes('failed to fetch')",
+        "text.includes('uri=/api/')",
+        "window.addEventListener('unhandledrejection'",
+        "window.addEventListener('offline'",
+        'event.preventDefault();',
+        "typeof result.then === 'function'",
+        'Der Befehl wird nicht automatisch wiederholt.',
+        "navigator.onLine === false",
+        "jalActionInFlight && ident !== 'Stop'",
+        'failVisualizationTransport',
+    ]
+    for pattern in required:
+        if pattern not in html:
+            ERRORS.append(
+                f'{html_path.relative_to(ROOT)}: visualization transport protection missing ({pattern})'
+            )
+
+    forbidden = [
+        'setTimeout(() => requestAction(',
+        'setInterval(() => requestAction(',
+        'fetch("/api/',
+        "fetch('/api/",
+    ]
+    for pattern in forbidden:
+        if pattern in html:
+            ERRORS.append(
+                f'{html_path.relative_to(ROOT)}: unsafe automatic API retry/direct API use present ({pattern})'
+            )
+
 def main() -> int:
     check_required()
     check_root_structure()
@@ -1056,6 +1115,7 @@ def main() -> int:
     check_free_gt8_event_sources()
     check_native_shutter_visualization()
     check_custom_html_tile()
+    check_visualization_transport_resilience()
     check_javascript()
     check_measured_blind_start_model()
     check_timing_examples()

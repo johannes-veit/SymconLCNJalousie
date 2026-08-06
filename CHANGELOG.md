@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.1.27 – 2026-08-06
+
+- Schnelle Mehrinstanzstarts entkoppelt: Eine noch offene Relaisbestätigung einer anderen Jalousie blockiert das nächste Telegramm nicht mehr synchron.
+- LCN-Telegramme werden weiterhin über eine globale Sendesperre und nun mit einem festen Mindestabstand von 100 ms eingespeist; anschließend dürfen die Motoren unabhängig parallel laufen.
+- Lange 15-s-Wartephasen innerhalb eines Visualisierungs-/API-Aufrufs entfernt, wodurch schnelle Gruppenbedienungen keine unnötigen `/api/`-Timeouts mehr begünstigen.
+- Während `ApplyChanges` werden alte Relais-/GT8-Ereignisse sowie Worker/Healthcheck vor dem Skriptneuaufbau angehalten. Controlleraufrufe gegen eine halb aktualisierte Modulfunktion werden ohne LCN-Befehl verworfen.
+- Reine Update-/Initialisierungsverriegelungen werden nach erfolgreichem Neuaufbau automatisch entfernt, sofern Konfiguration und Laufzeitprüfung gültig sind und beide ausgewählten Motorrelais sicher AUS melden.
+- Echte Motor-, STOP-, Doppelrelais- und TS-Routingfehler bleiben weiterhin manuell quittierungspflichtig.
+- Liefert `LCN_RequestStatus` bei unverändert ausgeschalteten Relais kein neues OnUpdate-Ereignis, wird der sichere AUS-Zustand übernommen, statt alle Instanzen nach einem Update zu verriegeln.
+- Eine gültige Referenz und die aktuelle Zwischenposition bleiben bei normalen Updates erhalten. Eine neue Referenzfahrt ist nur bei bereits ungültiger Referenz, inkompatiblem Altmodell oder nachweislich positionsunsicherem Bewegungsablauf erforderlich.
+- Runtime-Skriptkennung auf V11.9 erhöht.
+
+## 0.1.26 – 2026-08-06
+
+- HTML-SDK-Bedienung gegen vorübergehende `/api/`-Verbindungsabbrüche gehärtet.
+- Asynchrone `Failed to fetch`-/`ClientException`-Fehler werden in der Kachel abgefangen und als lokale Warnung dargestellt.
+- Während einer noch unbestätigten Übertragung werden weitere Nicht-STOP-Befehle kurz gesperrt; schnelle Doppelklicks erzeugen keine zusätzlichen Toggle-Telegramme.
+- Bei fehlender API-Rückmeldung endet die lokale Wartesperre nach acht Sekunden kontrolliert. Der unsichere Befehl wird ausdrücklich nicht automatisch wiederholt.
+- Offline-/Online-Wechsel werden erkannt. Nach einer Unterbrechung fordert die Kachel zur Prüfung des realen Relaiszustands auf.
+- Relais-, Referenz-, Adress-, Mehrinstanz- und Startbestätigungslogik aus 0.1.25 unverändert übernommen.
+
+## 0.1.25 – 2026-08-06
+
+- Tatsächliche LCN-Segment-/Target-Adressen werden aus den Symcon-Instanzkonfigurationen gelesen und in Konfiguration sowie Diagnose angezeigt.
+- Abweichungen zwischen einem im Namen angegebenen `(Segment,Target)` und der internen Adresse werden mit Status 214 gesperrt.
+- Doppelte aktive LCN-Modulinstanzen auf derselben realen Adresse sowie identische TS-KURZ-Befehle auf derselben realen Senderoute werden instanzübergreifend erkannt.
+- Routing-Fingerprint um reale Sender- und Aktoradresse erweitert; eine Target-Korrektur hebt eine alte Routingsperre automatisch auf.
+- Startbestätigung erhält immer ein zweites vollständiges Bestätigungsfenster, auch wenn eine aktive LCN-Statusabfrage vorübergehend nicht möglich ist.
+- Ausbleibender Start bei weiterhin ausgeschalteten Relais verwirft nur den Auftrag, erhält eine gültige Referenz und erzeugt keine dauerhafte Fehlerverriegelung.
+- Alte verriegelnde Startbestätigungsfehler aus früheren Versionen werden beim Update nur dann automatisch entfernt, wenn beide ausgewählten Relais sicher AUS sind.
+- Fremdstart wird erst nach frischer Bestätigung beider ausgewählter Senderrelais als dauerhaftes TS-Routingproblem gesperrt; zufällige zeitgleiche GT8-Bedienung löst nicht allein durch den Zeitstempel eine Sperre aus.
+- Runtime-Skriptkennung auf V11.8 erhöht, damit alte generierte Skripte eindeutig erkannt und ersetzt werden.
+
+## 0.1.24 – 2026-08-06
+
+- Eindeutig erkannte Fremdstarts werden bereits während der Startbestätigung verarbeitet und verriegeln den Sender sofort.
+- Die tatsächlich gesendete Kombination aus Sendemodul, Richtung und TS-KURZ wird in der Fehlermeldung ausgegeben.
+- Eine physisch widerlegte Sendemodul-/TS-Zuordnung bleibt gesperrt und kann nicht durch bloßes Quittieren erneut ausgelöst werden.
+- Freigabe erst nach geänderter Hardwarebindung oder zweistufiger erneuter TS-Abnahme: Bestätigung deaktivieren/speichern, Busmonitor prüfen, Bestätigung aktivieren/speichern.
+- Eine vorhandene Positionsreferenz wird durch einen nicht bestätigten beziehungsweise fehlgeleiteten Start nicht verändert.
+
 ## 0.1.23 – 2026-08-06
 
 - Referenzverlust beim Start eines neuen Fahrbefehls behoben: Eine gültige Referenz bleibt während normaler Symcon- und externer Fahrten erhalten und wird an sicher erreichten Endlagen aktualisiert. Nur nachweislich positionsunsichere Abläufe verwerfen sie noch.

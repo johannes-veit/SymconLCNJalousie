@@ -1,7 +1,7 @@
 <?php
 /**
  * Jalousiesteuerung LCN / IP-Symcon 9.0
- * V11.7 - Zentraler PHP-Controller
+ * V11.9 - Zentraler PHP-Controller
  *
  * Freigabestand fuer Symcon 9.0 / PHP 8.5.
  *
@@ -53,6 +53,15 @@ if (!IPS_SemaphoreEnter($lockName, 5000)) {
 try {
     $action = J_DetectAction($rootID, $_IPS);
     J_Log($rootID, 'Controller-Aufruf: ' . $action);
+
+    if (IPS_FunctionExists('LCNJAL_IsMaintenanceActive')
+        && LCNJAL_IsMaintenanceActive($rootID)) {
+        // Während ApplyChanges kann der Objektbaum gerade neu aufgebaut werden.
+        // Deshalb hier bewusst keine Statusvariable schreiben und nur ohne
+        // LCN-Befehl zurückkehren.
+        IPS_LogMessage('Jalousie', 'Modulaktualisierung aktiv; Controller-Aufruf ohne LCN-Befehl verworfen (Instanz #' . $rootID . ').');
+        return;
+    }
 
     if (!in_array($action, ['RESET_ERROR', 'RELAY_UPDATE', 'STATUS', 'HEALTHCHECK', 'EXTERNAL_REFERENCE', 'EXTERNAL_STOP', 'STOP_TIMEOUT'], true)
         && IPS_FunctionExists('LCNJAL_IsRuntimePermitted')
@@ -167,7 +176,11 @@ try {
     }
 } catch (Throwable $e) {
     try {
-        J_SetError($rootID, 'Controller-Fehler: ' . $e->getMessage(), false);
+        if (J_IsTransientModuleInfrastructureError($e)) {
+            J_SetLastAction($rootID, 'Vorübergehender Modul-/Updatezustand; kein LCN-Befehl gesendet: ' . $e->getMessage());
+        } else {
+            J_SetError($rootID, 'Controller-Fehler: ' . $e->getMessage(), false);
+        }
     } catch (Throwable $errorHandlerFailure) {
         IPS_LogMessage('Jalousie', 'Fehlerbehandlung fehlgeschlagen: ' . $errorHandlerFailure->getMessage());
     }
@@ -181,6 +194,15 @@ try {
         IPS_LogMessage('Jalousie', 'Visualisierung konnte nicht synchronisiert werden: ' . $visualizationError->getMessage());
     }
     IPS_SemaphoreLeave($lockName);
+}
+
+function J_IsTransientModuleInfrastructureError(Throwable $error): bool
+{
+    $message = $error->getMessage();
+    return str_contains($message, 'Die sichere Hardwarebindung des Moduls ist nicht verfügbar')
+        || str_contains($message, 'Die sichere Hardwarebindung ist ungültig')
+        || str_contains($message, 'Sichere richtungsgebundene Befehlsfunktion fehlt')
+        || str_contains($message, 'Modulaktualisierung läuft');
 }
 
 function J_RootID(int $scriptID): int
@@ -294,11 +316,18 @@ function J_ClearCommandLease(int $rootID): void
     }
 }
 
+function J_SendRouteKey(array $binding): string
+{
+    $address = $binding['sendModuleAddress'] ?? [];
+    return is_array($address) ? (string) ($address['routeKey'] ?? '') : '';
+}
+
 function J_ReportPossibleForeignCommand(int $rootID, int $direction, float $nowMs): int
 {
     if (!IPS_FunctionExists('IPS_GetInstanceListByModuleID')
         || !IPS_FunctionExists('LCNJAL_GetCommandLease')
-        || !IPS_FunctionExists('LCNJAL_ReportForeignRelayResponse')) {
+        || !IPS_FunctionExists('LCNJAL_ReportForeignRelayResponse')
+        || !IPS_FunctionExists('LCNJAL_GetHardwareBinding')) {
         return 0;
     }
 
@@ -318,17 +347,51 @@ function J_ReportPossibleForeignCommand(int $rootID, int $direction, float $nowM
         if ($startedMs <= 0.0 || $nowMs - $startedMs < -500.0 || $nowMs - $startedMs > 10000.0) {
             continue;
         }
-        $candidates[] = $instanceID;
+        $candidates[] = ['instanceID' => $instanceID, 'lease' => $lease];
     }
 
+    // Nur eine einzige offene START-Transaktion lässt sich sicher zeitlich
+    // zuordnen. Bei mehreren parallelen, noch unbestätigten Starts wird keine
+    // Fremdzuordnung behauptet.
     if (count($candidates) !== 1) {
         return 0;
     }
 
-    $ownerID = $candidates[0];
+    $ownerID = (int) $candidates[0]['instanceID'];
+    $lease = (array) $candidates[0]['lease'];
+    $ownerBinding = json_decode(LCNJAL_GetHardwareBinding($ownerID), true);
+    $receiverBinding = J_HardwareBinding($rootID);
+    if (!is_array($ownerBinding)) {
+        return 0;
+    }
+
+    $ownerDirection = (int) ($lease['direction'] ?? J_DIR_NONE);
+    $ownerTs = $ownerDirection === J_DIR_UP
+        ? (string) ($ownerBinding['tsShortUp'] ?? '')
+        : (string) ($ownerBinding['tsShortDown'] ?? '');
+    $ownerRouteKey = J_SendRouteKey($ownerBinding);
+    $receiverActorAddress = $receiverBinding['actorModuleAddress'] ?? [];
+    $receiverActorRouteKey = is_array($receiverActorAddress)
+        ? (string) ($receiverActorAddress['routeKey'] ?? '')
+        : '';
+
     SetValueInteger(J_ID($rootID, '05_Intern', 'Fremdbefehl_Quelle'), $ownerID);
     SetValueFloat(J_ID($rootID, '05_Intern', 'Fremdbefehl_Erkannt_ms'), $nowMs);
-    LCNJAL_ReportForeignRelayResponse($ownerID, $rootID, $direction);
+    LCNJAL_ReportForeignRelayResponse(
+        $ownerID,
+        $rootID,
+        $direction,
+        json_encode([
+            'correlationCandidate' => true,
+            'ownerDirection' => $ownerDirection,
+            'ownerTs' => $ownerTs,
+            'ownerSendRouteKey' => $ownerRouteKey,
+            'ownerLeaseStartedMs' => (float) ($lease['startedMs'] ?? 0.0),
+            'receiverActorRouteKey' => $receiverActorRouteKey,
+            'receiverRelayUpVariableID' => (int) ($receiverBinding['relayUpVariableID'] ?? 0),
+            'receiverRelayDownVariableID' => (int) ($receiverBinding['relayDownVariableID'] ?? 0),
+        ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: '{}'
+    );
     return $ownerID;
 }
 
@@ -339,6 +402,107 @@ function J_GetForeignRelayResponse(int $rootID): array
     }
     $response = json_decode(LCNJAL_GetForeignRelayResponse($rootID), true);
     return is_array($response) ? $response : [];
+}
+
+function J_GetRecentForeignRelayResponse(int $rootID, float $maxAgeMs = 15000.0): array
+{
+    $response = J_GetForeignRelayResponse($rootID);
+    $reportedMs = (float) ($response['reportedMs'] ?? 0.0);
+    $receiverID = (int) ($response['receiverInstanceID'] ?? 0);
+    $direction = (int) ($response['direction'] ?? J_DIR_NONE);
+    if ($reportedMs <= 0.0
+        || $receiverID <= 0
+        || !J_IsDirection($direction)
+        || J_NowMs() - $reportedMs < -500.0
+        || J_NowMs() - $reportedMs > $maxAgeMs) {
+        return [];
+    }
+    return $response;
+}
+
+function J_HandleForeignRelayResponse(int $rootID, int $order, bool $requireFreshSelectedRelaysOff = false): bool
+{
+    if (!$requireFreshSelectedRelaysOff
+        || $order !== J_CurrentOrder($rootID)
+        || GetValueInteger(J_ID($rootID, '04_Istwerte', 'Phase')) !== J_PHASE_WAIT_START
+        || GetValueInteger(J_ID($rootID, '05_Intern', 'Auftragstyp')) === J_ORDER_NONE
+        || J_RelayState($rootID) !== J_DIR_NONE) {
+        return false;
+    }
+
+    // Ein Fremdstart wird erst dann als Routingfehler verriegelt, wenn eine
+    // ausdrücklich angeforderte, frische Statusantwort bestätigt hat, dass
+    // beide ausgewählten Relais des Senders weiterhin AUS sind. Damit kann ein
+    // zufällig zeitgleich bedienter externer GT8 nicht allein durch seinen
+    // Zeitstempel eine falsche Verriegelung auslösen.
+    $freshUp = GetValueBoolean(J_ID($rootID, '05_Intern', 'Startstatus_Relais_AUF_Empfangen'));
+    $freshDown = GetValueBoolean(J_ID($rootID, '05_Intern', 'Startstatus_Relais_AB_Empfangen'));
+    if (!$freshUp || !$freshDown) {
+        return false;
+    }
+
+    $foreign = J_GetRecentForeignRelayResponse($rootID);
+    if ($foreign === [] || !(bool) ($foreign['correlationCandidate'] ?? false)) {
+        return false;
+    }
+
+    $reportedMs = (float) ($foreign['reportedMs'] ?? 0.0);
+    $sentMs = GetValueFloat(J_ID($rootID, '05_Intern', 'Befehl_gesendet_ms'));
+    $correlationWindowMs = max(
+        1000,
+        min(
+            5000,
+            J_ConfigInt($rootID, 'Relaisbestaetigung_ms')
+                + J_ConfigInt($rootID, 'Relais_Koaleszenz_ms')
+                + 750
+        )
+    );
+    if ($sentMs <= 0.0
+        || $reportedMs < $sentMs - 250.0
+        || $reportedMs - $sentMs > $correlationWindowMs) {
+        return false;
+    }
+
+    $receiverID = (int) ($foreign['receiverInstanceID'] ?? 0);
+    $receiverName = (string) ($foreign['receiverName'] ?? '');
+    $foreignDirection = (int) ($foreign['direction'] ?? J_DIR_NONE);
+    $expectedDirection = GetValueInteger(J_ID($rootID, '05_Intern', 'Erwartete_Richtung'));
+    $binding = J_HardwareBinding($rootID);
+    $ts = $expectedDirection === J_DIR_UP
+        ? (string) $binding['tsShortUp']
+        : (string) $binding['tsShortDown'];
+    $sendRouteKey = J_SendRouteKey($binding);
+
+    // Schutz gegen eine alte oder zwischenzeitlich überholte Fremdantwort.
+    if ((int) ($foreign['ownerDirection'] ?? J_DIR_NONE) !== $expectedDirection
+        || !hash_equals((string) ($foreign['ownerTs'] ?? ''), $ts)
+        || $sendRouteKey === ''
+        || !hash_equals((string) ($foreign['ownerSendRouteKey'] ?? ''), $sendRouteKey)) {
+        return false;
+    }
+
+    J_ClearCommandLease($rootID);
+    if (IPS_FunctionExists('LCNJAL_BlockCurrentRouting')) {
+        LCNJAL_BlockCurrentRouting(
+            $rootID,
+            'Zeitlich bestätigter Fremdstart von ' . ($receiverName !== '' ? $receiverName . ' ' : '') . '(#' . $receiverID
+                . ') nach Senderoute ' . $sendRouteKey . ' und TS-Befehl ' . $ts
+        );
+    }
+    J_SetError(
+        $rootID,
+        'TS-Routingfehler bestätigt: Instanz ' . IPS_GetName($rootID) . ' (#' . $rootID . ') sendete Richtung '
+            . ($expectedDirection === J_DIR_UP ? 'AUF' : 'ZU')
+            . ' über reale Senderoute ' . $sendRouteKey . ' (Sendemodul #' . (int) $binding['sendModuleID'] . ') mit TS ' . $ts
+            . '. Eine frische Statusabfrage bestätigte beide ausgewählten Relais #' . (int) $binding['relayUpVariableID']
+            . '/#' . (int) $binding['relayDownVariableID'] . ' weiterhin AUS; im selben Startfenster meldete jedoch '
+            . ($receiverName !== '' ? $receiverName . ' ' : '') . '(#' . $receiverID . ') Richtung '
+            . ($foreignDirection === J_DIR_UP ? 'AUF' : 'ZU')
+            . '. Reale Segment-/Target-Adresse des Sendemoduls und TS-KURZ-Programmierung prüfen. Die vorhandene Positionsreferenz wurde nicht verändert.',
+        false,
+        false
+    );
+    return true;
 }
 
 function J_PrepareStartConfirmation(int $rootID): void
@@ -1970,52 +2134,61 @@ function J_HandleStartTimeout(int $rootID, int $order): void
     }
 
     $statusRetryID = J_ID($rootID, '05_Intern', 'Startstatus_Nachfrage_Aktiv');
-    if (!GetValueBoolean($statusRetryID)
-        && IPS_FunctionExists('LCN_RequestStatus')) {
-        $actorModuleID = (int) J_HardwareBinding($rootID)['actorModuleID'];
-        if ($actorModuleID > 0 && J_LcnInstanceReady($actorModuleID)
-            && LCN_RequestStatus($actorModuleID)) {
-            SetValueBoolean(J_ID($rootID, '05_Intern', 'Startstatus_Relais_AUF_Empfangen'), false);
-            SetValueBoolean(J_ID($rootID, '05_Intern', 'Startstatus_Relais_AB_Empfangen'), false);
-            SetValueBoolean($statusRetryID, true);
-            SetValueFloat(
-                J_ID($rootID, '05_Intern', 'Bestaetigung_bis_ms'),
-                J_NowMs() + max(1000, J_ConfigInt($rootID, 'Relaisbestaetigung_ms'))
-            );
-            J_SetWorker($rootID, true);
-            J_SetLastAction($rootID, 'Startbestätigung verzögert; ausgewähltes Aktormodul erneut abgefragt');
-            return;
+    if (!GetValueBoolean($statusRetryID)) {
+        SetValueBoolean(J_ID($rootID, '05_Intern', 'Startstatus_Relais_AUF_Empfangen'), false);
+        SetValueBoolean(J_ID($rootID, '05_Intern', 'Startstatus_Relais_AB_Empfangen'), false);
+        SetValueBoolean($statusRetryID, true);
+
+        $statusRequested = false;
+        if (IPS_FunctionExists('LCN_RequestStatus')) {
+            $actorModuleID = (int) J_HardwareBinding($rootID)['actorModuleID'];
+            if ($actorModuleID > 0 && J_LcnInstanceReady($actorModuleID)) {
+                try {
+                    $statusRequested = LCN_RequestStatus($actorModuleID);
+                } catch (Throwable $statusError) {
+                    J_Log($rootID, 'Startstatusabfrage fehlgeschlagen: ' . $statusError->getMessage());
+                }
+            }
         }
-    }
 
-    $freshUp = GetValueBoolean(J_ID($rootID, '05_Intern', 'Startstatus_Relais_AUF_Empfangen'));
-    $freshDown = GetValueBoolean(J_ID($rootID, '05_Intern', 'Startstatus_Relais_AB_Empfangen'));
-    SetValueBoolean($statusRetryID, false);
-    J_ClearCommandLease($rootID);
-
-    $foreign = J_GetForeignRelayResponse($rootID);
-    $reportedMs = (float) ($foreign['reportedMs'] ?? 0.0);
-    if ($reportedMs > 0.0 && J_NowMs() - $reportedMs <= 15000.0) {
-        $receiverID = (int) ($foreign['receiverInstanceID'] ?? 0);
-        $receiverName = (string) ($foreign['receiverName'] ?? '');
-        J_SetError(
+        // Auch wenn eine aktive Statusabfrage momentan nicht möglich ist,
+        // erhält die reale Relaismeldung ein zweites vollständiges
+        // Bestätigungsfenster. Damit führen kurze Bus-/Symcon-Verzögerungen
+        // nicht zu einer voreiligen Abbruchentscheidung.
+        SetValueFloat(
+            J_ID($rootID, '05_Intern', 'Bestaetigung_bis_ms'),
+            J_NowMs() + max(1000, J_ConfigInt($rootID, 'Relaisbestaetigung_ms'))
+        );
+        J_SetWorker($rootID, true);
+        J_SetLastAction(
             $rootID,
-            'TS-Routing stimmt nicht mit der Instanzzuordnung überein: Der Befehl dieser Instanz bestätigte keines der ausgewählten Relais, zeitgleich startete jedoch '
-                . ($receiverName !== '' ? $receiverName . ' ' : '') . '(#' . $receiverID . '). Sendemodul und TS-KURZ-Zuordnung in LCN-PRO/Busmonitor prüfen.',
-            false
+            $statusRequested
+                ? 'Startbestätigung verzögert; ausgewähltes Aktormodul erneut abgefragt'
+                : 'Startbestätigung verzögert; zweite passive Bestätigungsfrist läuft'
         );
         return;
     }
 
+    $freshUp = GetValueBoolean(J_ID($rootID, '05_Intern', 'Startstatus_Relais_AUF_Empfangen'));
+    $freshDown = GetValueBoolean(J_ID($rootID, '05_Intern', 'Startstatus_Relais_AB_Empfangen'));
+
+    if ($freshUp && $freshDown && J_HandleForeignRelayResponse($rootID, $order, true)) {
+        return;
+    }
+
+    SetValueBoolean($statusRetryID, false);
+    J_ClearCommandLease($rootID);
+
     $message = $freshUp && $freshDown
-        ? 'LCN-Telegramm wurde angenommen, aber beide ausgewählten Motorrelais blieben nach einer frischen Statusabfrage AUS. Der Auftrag wurde sicher verworfen.'
-        : 'Keine vollständige aktuelle Relaisstatusantwort innerhalb der Startbestätigungszeit. Der Auftrag wurde sicher verworfen; die Instanz bleibt betriebsbereit.';
+        ? 'LCN-Telegramm wurde angenommen, aber beide ausgewählten Motorrelais blieben nach einer frischen Statusabfrage AUS. Der Auftrag wurde sicher verworfen; die Positionsreferenz blieb unverändert.'
+        : 'Keine vollständige aktuelle Relaisstatusantwort innerhalb zweier Startbestätigungsfenster. Der Auftrag wurde sicher verworfen; die Instanz bleibt betriebsbereit und die Positionsreferenz unverändert.';
     SetValueString(J_ID($rootID, '04_Istwerte', 'Fehlertext'), $message);
     J_ClearPending($rootID);
     SetValueInteger(J_ID($rootID, '05_Intern', 'Folge_Lamelle'), -1);
     SetValueInteger(J_ID($rootID, '05_Intern', 'Folge_Richtung'), J_DIR_NONE);
     J_BeginCancelGuard($rootID, 'Start nicht bestätigt; Spätstart-Schutz ohne Fehlerverriegelung', false);
 }
+
 
 function J_HandleStopTimeout(int $rootID, int $order): void
 {
@@ -2142,6 +2315,7 @@ function J_HandleCancelGuard(int $rootID, int $order): void
     J_SetWorker($rootID, false);
     $errorAfter = GetValueBoolean(J_ID($rootID, '05_Intern', 'Abbruch_Fehlerphase'));
     if (!$errorAfter && J_HasPending($rootID)) {
+        SetValueString(J_ID($rootID, '04_Istwerte', 'Fehlertext'), '');
         J_StartPending($rootID);
     } elseif ($errorAfter) {
         $message = GetValueString(J_ID($rootID, '04_Istwerte', 'Fehlertext'));
@@ -2151,7 +2325,14 @@ function J_HandleCancelGuard(int $rootID, int $order): void
             false
         );
     } else {
-        J_FinishIdle($rootID, 'Abbruch-Schutzfenster beendet');
+        $message = GetValueString(J_ID($rootID, '04_Istwerte', 'Fehlertext'));
+        SetValueString(J_ID($rootID, '04_Istwerte', 'Fehlertext'), '');
+        J_FinishIdle(
+            $rootID,
+            $message !== ''
+                ? 'Startauftrag ohne Relaisbewegung verworfen: ' . $message
+                : 'Abbruch-Schutzfenster beendet'
+        );
     }
 }
 
@@ -2373,11 +2554,34 @@ function J_CompleteStatusSync(int $rootID, int $order): void
             $missing[] = 'Relais AB';
         }
         if ($missing !== []) {
+            // Einige LCN-/PCHK-Konstellationen aktualisieren den gespeicherten
+            // Booleanwert bei RequestStatus, erzeugen bei unverändertem AUS
+            // aber kein separates OnUpdate-Ereignis. Sind beide ausgewählten
+            // Motorrelais aktuell AUS, ist ein sicherer Stillstand gegeben:
+            // Routineupdates dürfen dann weder eine Fehlerverriegelung noch
+            // den Verlust einer gültigen Referenz verursachen.
+            $currentState = J_RelayState($rootID);
+            if ($currentState === J_DIR_NONE) {
+                J_SetGt8EventsActive($rootID, true);
+                SetValueInteger(J_ID($rootID, '04_Istwerte', 'Fahrstatus'), J_DIR_NONE);
+                SetValueInteger(J_ID($rootID, '04_Istwerte', 'Letzte_Statusmeldung'), time());
+                SetValueFloat(J_ID($rootID, '05_Intern', 'Sync_bis_ms'), 0.0);
+                SetValueString(J_ID($rootID, '04_Istwerte', 'Fehlertext'), '');
+                J_MarkRelaysOff($rootID);
+                J_FinishIdle(
+                    $rootID,
+                    GetValueBoolean(J_ID($rootID, '04_Istwerte', 'Position_Referenziert'))
+                        ? 'Statusabgleich: beide Relais AUS; gespeicherte Referenz ohne manuelle Quittierung übernommen'
+                        : 'Statusabgleich: beide Relais AUS; vorhandener unreferenzierter Zustand übernommen'
+                );
+                return;
+            }
+
             SetValueFloat(J_ID($rootID, '05_Intern', 'Sync_bis_ms'), 0.0);
             J_SetError(
                 $rootID,
-                'Statusabgleich ohne aktuelle OnUpdate-Rueckmeldung: ' . implode(', ', $missing)
-                    . '. Statussync_ms erhoehen oder LCN/PCHK und Relaisereignisse pruefen.',
+                'Statusabgleich ohne aktuelle OnUpdate-Rueckmeldung bei aktiv gemeldetem Relais: ' . implode(', ', $missing)
+                    . '. Zur Sicherheit reale Relaislage prüfen und erst danach quittieren.',
                 false
             );
             return;

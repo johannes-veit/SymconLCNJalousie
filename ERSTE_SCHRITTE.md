@@ -20,7 +20,7 @@ Diese Anleitung führt Sie ohne Git-Vorkenntnisse vom vorbereiteten Ordner bis z
 
 ## B. Ersten Stand speichern und öffentlich veröffentlichen
 
-1. Unten links bei **Summary** tragen Sie ein: `Update Symcon LCN Jalousie 0.1.23`.
+1. Unten links bei **Summary** tragen Sie ein: `Update Symcon LCN Jalousie 0.1.24`.
 2. Klicken Sie auf **Commit to main**.
 3. Klicken Sie oben auf **Publish repository**.
 4. Kontrollieren Sie den Namen `SymconLCNJalousie`.
@@ -58,7 +58,7 @@ Wenn Symcon meldet, der Ordner `modules` sei ein ungültiges Modul, liegen die M
 
 Arbeiten Sie die Bereiche von oben nach unten ab:
 
-1. **LCN-Sendemodul** – das Modul, auf dem die virtuellen Tasten liegen, zum Beispiel M22.
+1. **LCN-Sendemodul** – das Modul, auf dem die virtuellen Tasten liegen, zum Beispiel M22. Ab 0.1.25 zeigt das Formular zusätzlich die intern gespeicherte Adresse aus `Segment` und `Target`. Diese muss mit der Adresse im Namen und mit dem realen LCN-Modul übereinstimmen.
 2. **LCN-Aktormodul** – das Modul mit den Motorrelais, zum Beispiel M93.
 3. **Relaisstatus AUF** – echte Boolean-Statusvariable des AUF-Relais.
 4. **Relaisstatus AB** – echte Boolean-Statusvariable des AB-Relais.
@@ -104,7 +104,7 @@ Arbeiten Sie die Bereiche von oben nach unten ab:
 Dieser Fehler betraf Version 0.1.2. In Version 0.1.3 wird die Initialkonfiguration des Konfigurators korrekt als JSON-Objekt `{}` ausgegeben. Nach dem Update in der Symcon-Modulverwaltung kann die Zeile „Neue LCN-Jalousie“ über „Alle erstellen“ angelegt werden.
 ## Kachel und erste Referenz
 
-Nach der Installation beziehungsweise dem Update auf 0.1.23 die Jalousieinstanz einmal mit **Übernehmen** neu anwenden und die Kachel-Visualisierung mit `Strg + F5` neu laden. Die Instanz zeigt anschließend die korrigierte HTML-SDK-Kachel: Behang und Lamellen mit fluchtenden Dreispalten-Layouts aus runden Tasten, mittiger Grafik und rechtem Slider, ShakeFree nach Endlage ZU sowie dem kompakten Laufstatus. Der Instanzname wird von Symcon selbst dargestellt und innerhalb der Kachel nicht wiederholt.
+Nach der Installation beziehungsweise dem Update auf 0.1.24 die Jalousieinstanz einmal mit **Übernehmen** neu anwenden und die Kachel-Visualisierung mit `Strg + F5` neu laden. Die Instanz zeigt anschließend die korrigierte HTML-SDK-Kachel: Behang und Lamellen mit fluchtenden Dreispalten-Layouts aus runden Tasten, mittiger Grafik und rechtem Slider, ShakeFree nach Endlage ZU sowie dem kompakten Laufstatus. Der Instanzname wird von Symcon selbst dargestellt und innerhalb der Kachel nicht wiederholt.
 
 Solange `Position gültig` ausgeschaltet ist, sind 0 %/0 % nur Initialwerte und keine bestätigte reale Stellung. Führen Sie als ersten Abgleich im Modul eine **Referenzfahrt AUF** oder **Referenzfahrt AB** aus. Nach dem kontrollierten Fahrtende setzt das Modul 0 %/0 % beziehungsweise 100 %/100 % und schaltet `Position gültig` ein. Ist die Position noch unbekannt, behandelt das Modul den ersten Symcon-Endlagenauftrag auf 0 % oder 100 % automatisch als volle Referenzfahrt mit der passenden richtungsabhängigen Gesamtzeit plus Referenzreserve. Die explizite Referenzfahrt ist für den Erstabgleich trotzdem am klarsten und bewusst auswählbar.
 
@@ -151,13 +151,24 @@ Beim Erstellen eines Symcon-Backups wird der Dienst kurz neu gestartet. Die Jalo
 5. Eine Endlagenfahrt ZU ausführen. Erwartung: Das ZU-Relais wird am Fahrtende ausgeschaltet. Falls die erste AUS-Bestätigung fehlt, wird der Status frisch abgefragt und nur bei weiterhin bestätigtem EIN genau ein STOP wiederholt.
 6. AUF und ZU jeder Instanz einzeln im LCN-Busmonitor prüfen. Ein eindeutiger TS-Datensatz muss ausschließlich die vorgesehene Jalousie schalten.
 
-## Abnahme nach Update auf Version 0.1.23
+## Abnahme nach Update auf Version 0.1.25
 
 1. Jede Jalousie einzeln aus 0 % nach ZU und aus 100 % nach AUF starten. `Position gültig` muss während der gesamten Fahrt eingeschaltet bleiben und die Positionsanzeige fortlaufen.
 2. Eine Jalousie extern über GT8 bis zur Endlage fahren lassen. Erwartung: Endlage wird automatisch referenziert; nach dem Kalibrierfenster wird das weiterhin aktive Richtungsrelais einmal ausgeschaltet.
 3. Dieselbe Prüfung bei zuvor ungültiger Referenz wiederholen. Vor der sicheren Endlage bleibt die Position ungültig, danach wird sie automatisch gültig.
 4. Zwei oder mehr verschiedene Jalousien kurz nacheinander über die Visualisierung starten. Die Telegramme werden bis zur jeweiligen Startbestätigung nacheinander gesendet; anschließend dürfen die Motoren gleichzeitig laufen.
 5. Während einer externen GT8-Fahrt ein Visualisierungsziel derselben Instanz auslösen. Der Visualisierungsauftrag muss verworfen werden; die externe Fahrt behält Vorrang.
-6. Im Busmonitor jede Instanz mit AUF und ZU prüfen. Falls der Befehl einer Instanz das Relais einer anderen Instanz startet, muss der Sender einen TS-Routingfehler melden. Die LCN-PRO-Zuordnung des Sendemoduls und des TS-Datenfelds ist dann trotz formal korrekter Symcon-IDs physisch falsch.
-7. Nach einem Neustart und nach erneutem **Übernehmen** kontrollieren, dass Referenzstatus und aktuelle Zwischenposition unverändert bleiben.
+6. Vor dem Busmonitortest prüfen, dass keine zwei aktiven Symcon-LCN-Modulinstanzen dieselben Werte `Segment`/`Target` am selben Splitter besitzen und dass der angezeigte Instanzname keine andere Adresse nennt.
+7. Im Busmonitor jede Instanz mit AUF und ZU prüfen. Falls der Befehl einer Instanz das Relais einer anderen Instanz startet, muss der Sender nach frischer Prüfung seiner beiden ausgewählten Relais einen TS-Routingfehler melden. Die reale Sendemoduladresse oder die LCN-PRO-Zuordnung des TS-Datenfelds ist dann falsch.
+8. Nach einem Neustart und nach erneutem **Übernehmen** kontrollieren, dass Referenzstatus und aktuelle Zwischenposition unverändert bleiben.
+
+
+
+## Schnelle Mehrfachbedienung und Updates ab Version 0.1.27
+
+Mehrere unterschiedliche Jalousien dürfen direkt nacheinander gestartet werden. Das Modul reiht nur die kurzen LCN-Telegramme mit mindestens 100 ms Abstand ein; nach dem jeweiligen Telegramm und der realen Relaismeldung laufen die Motoren unabhängig gleichzeitig. Eine Gruppenbedienung muss daher nicht mehrere Sekunden zwischen den einzelnen Jalousien warten.
+
+Bei einem normalen Modulupdate bleiben eine gültige Referenz und die aktuelle Position erhalten. Die alten Ereignisse und Timer werden während des Neuaufbaus kurz angehalten und danach automatisch wieder aktiviert. Sind beide Motorrelais AUS, werden reine Update-/Initialisierungsfehler automatisch bereinigt. Echte Relais-, STOP- oder Routingfehler werden aus Sicherheitsgründen weiterhin nicht automatisch quittiert.
+
+Ist die Referenz bereits vor dem Update ungültig, kann sie nicht allein aus dem zuletzt angezeigten Prozentwert sicher wiederhergestellt werden. In diesem Fall ist weiterhin eine vollständige Endlagenfahrt nötig.
 
