@@ -5,13 +5,13 @@ declare(strict_types=1);
 /**
  * LCN Jalousie – Symcon 9.0 compatibility module.
  *
- * This module creates and maintains the V11.9 object tree, runtime scripts,
+ * This module creates and maintains the V12.0 object tree, runtime scripts,
  * events, links and configuration values below one module instance.
  * The motor interlock and local operation remain in LCN-PRO.
  */
 class LCNJalousie extends IPSModuleStrict
 {
-    private const VERSION = '0.1.27';
+    private const VERSION = '0.1.28';
     private const EXECUTE_PARENT_ACTION = '{7938A5A2-0981-5FE0-BE6C-8AA610D654EB}';
 
     private const STATUS_ACTIVE = 102;
@@ -39,6 +39,101 @@ class LCNJalousie extends IPSModuleStrict
     private const STARTUP_VALIDATION_GRACE_SECONDS = 30;
     private const MODULE_ID = '{3057B192-E835-4916-AF1D-D89D6302DF74}';
     private const LCN_MODULE_ID = '{0E31FED6-E465-4621-95D4-AAF2683C41EC}';
+    private const STORAGE_SCHEMA_VERSION = 2;
+
+    /**
+     * Kompatible Konfigurations-Idents aus V0.1.27. Die Laufzeitskripte lesen
+     * diese Werte ab V0.1.28 direkt aus den Modul-Properties; dafür werden
+     * keine Spiegelvariablen mehr benötigt.
+     */
+    private const COMPACT_CONFIG_MAP = [
+        'Projektname' => ['ProjectName', 3],
+        'Modul_Aktiv' => ['ModuleEnabled', 0],
+        'LCN_Sendemodulinstanz_ID' => ['LCNSendModuleID', 1],
+        'LCN_Aktormodulinstanz_ID' => ['LCNActorModuleID', 1],
+        'Relais_AUF_ID' => ['RelayUpVariableID', 1],
+        'Relais_AB_ID' => ['RelayDownVariableID', 1],
+        'GT8_LANG_AUF_ID' => ['GT8LongUpVariableID', 1],
+        'GT8_LANG_AB_ID' => ['GT8LongDownVariableID', 1],
+        'TS_KURZ_AUF' => ['TSShortUp', 3],
+        'TS_KURZ_AB' => ['TSShortDown', 3],
+        'TS_Belegung_bestaetigt' => ['TSMappingConfirmed', 0],
+        'Gesamtlaufzeit_ms' => ['TotalTravelMs', 1],
+        'Wendezeit_ms' => ['TurnMs', 1],
+        'Sanftanlauf_ms' => ['SoftStartMs', 1],
+        'Sanftstopp_AUF_ms' => ['SoftStopUpMs', 1],
+        'Sanftstopp_ZU_ms' => ['SoftStopDownMs', 1],
+        'Behanglaufzeit_ms' => ['BlindTravelMs', 1],
+        'Referenzreserve_ms' => ['ReferenceReserveMs', 1],
+        'MaxFahrt_ms' => ['MaxTravelMs', 1],
+        'ShakeFree_ms' => ['ShakeFreeMs', 1],
+        'ShakeFree_Pause_ms' => ['ShakeFreePauseMs', 1],
+        'Kalibrierfenster_ms' => ['CalibrationWindowMs', 1],
+        'Relaisbestaetigung_ms' => ['RelayConfirmMs', 1],
+        'Stoppbestaetigung_ms' => ['StopConfirmMs', 1],
+        'Spaetstart_Schutz_ms' => ['LateStartGuardMs', 1],
+        'Workerfenster_ms' => ['WorkerWindowMs', 1],
+        'Positionstoleranz' => ['PositionTolerance', 2],
+        'Lamellentoleranz' => ['SlatTolerance', 2],
+        'Unreferenziert_erlauben' => ['AllowUnreferenced', 0],
+        'Diagnose_Log' => ['DiagnosticLog', 0],
+        'Statusabfrage_beim_Start' => ['RequestStatusOnStart', 0],
+        'Statussync_ms' => ['StatusSyncMs', 1],
+        'Relais_Koaleszenz_ms' => ['RelayCoalesceMs', 1],
+        'Befehlsabstand_ms' => ['CommandSpacingMs', 1],
+        'Healthcheck_s' => ['HealthcheckSeconds', 1],
+    ];
+
+    /**
+     * Interner Zustandsautomat aus V0.1.27. Diese Werte liegen ab V0.1.28
+     * kompakt in einem Modulbuffer und werden pro Controller-/Worker-Lauf
+     * transaktional gelesen und geschrieben.
+     */
+    private const COMPACT_RUNTIME_DEFAULTS = [
+        'Auftragsnummer' => 0,
+        'Auftragstyp' => 0,
+        'Erwartete_Richtung' => 0,
+        'Startzeit_ms' => 0.0,
+        'Start_Behang' => 0.0,
+        'Start_Lamelle' => 0.0,
+        'Start_Richtung' => 0,
+        'Geplante_Dauer_ms' => 0,
+        'Zielzeit_ms' => 0.0,
+        'Ziel_Behang' => 0.0,
+        'Ziel_Lamelle' => 0.0,
+        'Folge_Lamelle' => -1,
+        'Folge_Richtung' => 0,
+        'Stop_Angefordert' => false,
+        'Endlage_Hart' => false,
+        'Bestaetigung_bis_ms' => 0.0,
+        'Stop_bis_ms' => 0.0,
+        'Abbruch_bis_ms' => 0.0,
+        'Abbruch_Wartet_Auf_Start' => false,
+        'Abbruch_Fehlerphase' => false,
+        'Pending_Aktion' => 0,
+        'Pending_Wert' => 0.0,
+        'Pending_Richtung' => 0,
+        'Worker_Aktiv' => false,
+        'Kernel_Startzeit' => 0,
+        'Sync_bis_ms' => 0.0,
+        'Sync_Relais_AUF_Empfangen' => false,
+        'Sync_Relais_AB_Empfangen' => false,
+        'Shake_Nachlauf_Aktiv' => false,
+        'Startstatus_Nachfrage_Aktiv' => false,
+        'Stopstatus_Nachfrage_Aktiv' => false,
+        'Startstatus_Relais_AUF_Empfangen' => false,
+        'Startstatus_Relais_AB_Empfangen' => false,
+        'Stopstatus_Relais_AUF_Empfangen' => false,
+        'Stopstatus_Relais_AB_Empfangen' => false,
+        'Stop_Wiederholung_Gesendet' => false,
+        'Befehl_gesendet_ms' => 0.0,
+        'Externe_Referenz_Gesetzt' => false,
+        'Externe_Endlage_bis_ms' => 0.0,
+        'Externer_Autostopp_bis_ms' => 0.0,
+        'Externer_Autostopp_Aktiv' => false,
+        'Fremdbefehl_Quelle' => 0,
+        'Fremdbefehl_Erkannt_ms' => 0.0,
+    ];
 
     public function Create(): void
     {
@@ -107,6 +202,59 @@ class LCNJalousie extends IPSModuleStrict
         $this->RegisterAttributeString('BlockedRoutingFingerprint', '');
         $this->RegisterAttributeString('BlockedRoutingReason', '');
         $this->RegisterAttributeBoolean('RoutingRearmAllowed', false);
+        $this->RegisterAttributeInteger('CompactStorageSchemaVersion', 0);
+        $this->RegisterAttributeBoolean('CompactMigrationComplete', false);
+        $this->RegisterAttributeString('CompactMigrationSourceVersion', '');
+        $this->RegisterAttributeString('LegacyV127Snapshot', '');
+        $this->RegisterAttributeString('LegacyV127SnapshotHash', '');
+        $this->RegisterAttributeInteger('LegacyV127SnapshotCreated', 0);
+        $this->RegisterAttributeBoolean('RollbackPrepared', false);
+    }
+
+    public function Migrate(string $JSONData): string
+    {
+        parent::Migrate($JSONData);
+
+        // Migrate() wird von Symcon ausdrücklich beim Modulupdate aufgerufen.
+        // Dadurch stehen die ab V0.1.28 benötigten persistenten Attribute auch
+        // ohne Dienstneustart bereits im unmittelbar folgenden ApplyChanges
+        // bereit. Bestehende Werte werden niemals überschrieben.
+        $data = json_decode($JSONData, true, 512, JSON_THROW_ON_ERROR);
+        if (!is_array($data)) {
+            throw new RuntimeException('Modulpersistenz ist für die V0.1.28-Migration ungültig.');
+        }
+        if (!isset($data['attributes']) || !is_array($data['attributes'])) {
+            $data['attributes'] = [];
+        }
+
+        $defaults = [
+            'CompactStorageSchemaVersion' => 0,
+            'CompactMigrationComplete' => false,
+            'CompactMigrationSourceVersion' => '',
+            'LegacyV127Snapshot' => '',
+            'LegacyV127SnapshotHash' => '',
+            'LegacyV127SnapshotCreated' => 0,
+            'RollbackPrepared' => false,
+        ];
+        $changed = false;
+        foreach ($defaults as $name => $default) {
+            if (!array_key_exists($name, $data['attributes'])) {
+                $data['attributes'][$name] = $default;
+                $changed = true;
+            }
+        }
+        if (!$changed) {
+            return '';
+        }
+
+        $result = json_encode(
+            $data,
+            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION
+        );
+        if ($result === false) {
+            throw new RuntimeException('Modulpersistenz konnte für V0.1.28 nicht serialisiert werden.');
+        }
+        return $result;
     }
 
     public function ApplyChanges(): void
@@ -123,6 +271,27 @@ class LCNJalousie extends IPSModuleStrict
         // Die reale LCN-/GT8-Bedienung bleibt davon unberührt; nach dem Update
         // folgt ein vollständiger Statusabgleich.
         $this->SetBuffer('MaintenanceActive', '1');
+
+        // Für die Migration muss ausgeschlossen sein, dass noch ein bereits
+        // laufender Controller/Worker aus V0.1.27 gleichzeitig Legacy-Werte
+        // verändert. Neue Aufrufe sehen MaintenanceActive und werden bereits
+        // verworfen; diese Sperre wartet zusätzlich auf einen eventuell schon
+        // begonnenen Lauf. Erst danach darf der Objektbaum angefasst werden.
+        $applyLockName = 'Jalousie_PHP_' . $this->InstanceID;
+        $applyLockAcquired = IPS_SemaphoreEnter($applyLockName, 30000);
+        if (!$applyLockAcquired) {
+            $this->SetBuffer('MaintenanceActive', '0');
+            $this->WriteAttributeBoolean('FaultLatched', true);
+            $this->WriteAttributeString(
+                'FaultMessage',
+                'Update/Migration abgebrochen: laufende Jalousiesteuerung konnte innerhalb von 30 s nicht exklusiv angehalten werden. Es wurden keine Legacy-Variablen gelöscht.'
+            );
+            $this->SetStatus(self::STATUS_FAULT_LATCHED);
+            $this->SetSummary('inaktiv · Update sicher abgebrochen');
+            return;
+        }
+
+        $initializeAfterApply = false;
         try {
             $this->suspendRuntimeForApplyChanges();
         } catch (Throwable $maintenanceError) {
@@ -145,9 +314,9 @@ class LCNJalousie extends IPSModuleStrict
             $previousGeneratedVersion = $this->ReadAttributeString('GeneratedVersion');
             $this->ensureProfiles();
             $this->ensureInstanceVisualizationVariables();
+            $this->prepareCompactStorageMigration($previousGeneratedVersion);
             $ids = $this->ensureObjectTree();
             $this->ensureRuntimeScripts($ids['scripts']);
-            $this->synchronizeConfiguration($ids['configuration']);
             $this->migratePersistentReference($ids['state'], $previousGeneratedVersion);
             $this->invalidateReferenceAfterModelUpdate($ids['state'], $previousGeneratedVersion);
             $this->restorePersistentReference($ids['state']);
@@ -241,14 +410,18 @@ class LCNJalousie extends IPSModuleStrict
             // Nur ein tatsächlich positionsunsicherer Bewegungsablauf darf sie
             // ausdrücklich über InvalidateReference() verwerfen.
 
-            if ($kernelReady && $runtimeEnabled && !$wasRuntimeEnabled) {
-                $controllerID = @IPS_GetObjectIDByIdent('Controller', $ids['scripts']);
-                if ($controllerID !== false && IPS_ScriptExists((int) $controllerID)) {
-                    IPS_RunScriptWaitEx((int) $controllerID, ['ACTION' => 'INITIALIZE']);
-                }
-            }
+            // INITIALIZE darf nicht innerhalb der exklusiven ApplyChanges-
+            // Sperre aufgerufen werden: Der Controller verwendet dieselbe
+            // Instanzsperre. Die beabsichtigte einmalige Initialisierung wird
+            // deshalb erst nach Maintenance-Ende und Sperrenfreigabe ausgeführt.
+            $initializeAfterApply = $kernelReady && $runtimeEnabled && !$wasRuntimeEnabled;
 
             $this->SyncVisualization();
+            // Legacy-Variablen werden wirklich erst nach vollständig erfolgreichem
+            // Neuaufbau, Validierung, Initialisierung und Visualisierung entfernt.
+            if ($staticValidation['status'] === self::STATUS_ACTIVE && !$this->ReadAttributeBoolean('FaultLatched')) {
+                $this->finalizeCompactStorageMigration();
+            }
             $this->WriteAttributeString('GeneratedVersion', self::VERSION);
         } catch (Throwable $e) {
             $this->WriteAttributeBoolean('FaultLatched', true);
@@ -269,6 +442,19 @@ class LCNJalousie extends IPSModuleStrict
             IPS_LogMessage('LCN Jalousie #' . $this->InstanceID, $e->getMessage());
         } finally {
             $this->SetBuffer('MaintenanceActive', '0');
+            IPS_SemaphoreLeave($applyLockName);
+        }
+
+        if ($initializeAfterApply
+            && !$this->ReadAttributeBoolean('FaultLatched')
+            && $this->ReadAttributeBoolean('RuntimeEnabled')) {
+            $scriptsCategoryID = @IPS_GetObjectIDByIdent('06_Skripte', $this->InstanceID);
+            $controllerID = $scriptsCategoryID === false
+                ? false
+                : @IPS_GetObjectIDByIdent('Controller', (int) $scriptsCategoryID);
+            if ($controllerID !== false && IPS_ScriptExists((int) $controllerID)) {
+                IPS_RunScriptWaitEx((int) $controllerID, ['ACTION' => 'INITIALIZE']);
+            }
         }
     }
 
@@ -298,7 +484,7 @@ class LCNJalousie extends IPSModuleStrict
 
     public function CompleteStartupValidation(): void
     {
-        if (!$this->kernelIsReady()) {
+        if (!$this->kernelIsReady() || $this->GetBuffer('MaintenanceActive') === '1') {
             return;
         }
 
@@ -326,6 +512,10 @@ class LCNJalousie extends IPSModuleStrict
             // startender LCN-Abhängigkeiten beibehalten, wird sie hier nach
             // erfolgreicher Laufzeitprüfung ebenfalls automatisch bereinigt.
             $this->autoRecoverTransientMaintenanceFault($runtimeValidation);
+            $this->tryFinalizeCompactStorageMigrationSafely(
+                $staticValidation['status'] === self::STATUS_ACTIVE
+                    && !$this->ReadAttributeBoolean('FaultLatched')
+            );
 
             if ($runtimeDependencyUnavailable && $withinGrace) {
                 // Keine falsche Konfigurationsmeldung während LCN/PCHK seine
@@ -565,6 +755,7 @@ class LCNJalousie extends IPSModuleStrict
                 ['type' => 'Button', 'caption' => 'Objektbaum und Skripte neu aufbauen', 'onClick' => 'LCNJAL_Rebuild($id); echo "Objektbaum wurde geprüft und aktualisiert.";'],
                 ['type' => 'Button', 'caption' => 'LCN-Status anfordern', 'onClick' => 'LCNJAL_RequestLCNStatus($id); echo "Statusanforderung wurde gesendet.";'],
                 ['type' => 'Button', 'caption' => 'Fehler quittieren (nur bei Relais AUS)', 'onClick' => 'echo LCNJAL_AcknowledgeFault($id);'],
+                ['type' => 'Button', 'caption' => 'Rollback auf V0.1.27 vorbereiten', 'onClick' => 'echo LCNJAL_PrepareRollbackV127($id);'],
                 ['type' => 'Button', 'caption' => 'Diagnose anzeigen', 'onClick' => 'echo LCNJAL_GetDiagnostics($id);'],
             ],
             'status' => [
@@ -588,6 +779,106 @@ class LCNJalousie extends IPSModuleStrict
         ];
 
         return json_encode($form, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+    }
+
+    public function GetCompactConfiguration(): string
+    {
+        $json = json_encode(
+            $this->compactConfigurationArray(),
+            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION
+        );
+        if ($json === false) {
+            throw new RuntimeException('Kompakte Modulkonfiguration kann nicht serialisiert werden.');
+        }
+        return $json;
+    }
+
+    public function GetCompactRuntimeState(): string
+    {
+        $state = $this->readCompactRuntimeState();
+        $json = json_encode(
+            $state,
+            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION
+        );
+        if ($json === false) {
+            throw new RuntimeException('Kompakter Runtime-Zustand kann nicht serialisiert werden.');
+        }
+        return $json;
+    }
+
+    public function SetCompactRuntimeState(string $json): void
+    {
+        $decoded = json_decode($json, true);
+        if (!is_array($decoded)) {
+            throw new InvalidArgumentException('Kompakter Runtime-Zustand ist kein gültiges JSON-Objekt.');
+        }
+        $state = $this->normalizeCompactRuntimeState($decoded);
+        $encoded = json_encode(
+            $state,
+            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION
+        );
+        if ($encoded === false) {
+            throw new RuntimeException('Kompakter Runtime-Zustand kann nicht gespeichert werden.');
+        }
+        $this->SetBuffer('CompactRuntimeState', $encoded);
+
+        // Nach einer bewusst vorbereiteten Rückkehr auf V0.1.27 werden die
+        // wiederhergestellten Legacy-Internvariablen bis zum tatsächlichen
+        // Downgrade mitgeführt. Damit bleibt der Rückweg auch dann konsistent,
+        // wenn zwischen Vorbereitung und Repository-Rollback noch ein
+        // Status-/Workerlauf stattfindet.
+        $keepLegacyRuntimeSynchronized = $this->ReadAttributeBoolean('RollbackPrepared')
+            || !$this->ReadAttributeBoolean('CompactMigrationComplete');
+        if ($keepLegacyRuntimeSynchronized
+            && $this->legacyVariableCount('05_Intern') === count(self::COMPACT_RUNTIME_DEFAULTS)) {
+            $internalID = @IPS_GetObjectIDByIdent('05_Intern', $this->InstanceID);
+            if ($internalID !== false && IPS_CategoryExists((int) $internalID)) {
+                $this->writeCompactRuntimeToLegacyVariables((int) $internalID, $state);
+            }
+        }
+    }
+
+    /**
+     * Stellt die von V0.1.27 erwarteten Spiegel-/Internvariablen wieder her.
+     * Die eigentliche Konfiguration und die Referenzattribute werden nicht
+     * verändert. Anschließend kann das Repository auf V0.1.27 zurückgesetzt
+     * werden, ohne die Jalousie neu einpflegen zu müssen.
+     */
+    public function PrepareRollbackV127(): string
+    {
+        $relayUpID = $this->ReadPropertyInteger('RelayUpVariableID');
+        $relayDownID = $this->ReadPropertyInteger('RelayDownVariableID');
+        if (!$this->isBooleanVariable($relayUpID) || !$this->isBooleanVariable($relayDownID)) {
+            return 'Rollback nicht vorbereitet: Relaisstatusvariablen sind nicht sicher lesbar.';
+        }
+        if (GetValueBoolean($relayUpID) || GetValueBoolean($relayDownID)) {
+            return 'Rollback nicht vorbereitet: Mindestens ein Motorrelais ist aktiv. Erst beide Relais sicher AUS schalten.';
+        }
+
+        $lockName = 'Jalousie_PHP_' . $this->InstanceID;
+        if (!IPS_SemaphoreEnter($lockName, 5000)) {
+            return 'Rollback nicht vorbereitet: Jalousiesteuerung ist momentan beschäftigt.';
+        }
+
+        try {
+            if (!$this->verifyLegacySnapshot()) {
+                $this->captureAndStoreLegacySnapshot($this->ReadAttributeString('GeneratedVersion') ?: self::VERSION);
+            }
+
+            $configurationID = $this->category('01_Konfiguration', '01 Konfiguration (Rollback V0.1.27)', 10);
+            $internalID = $this->category('05_Intern', '05 Intern (Rollback V0.1.27)', 50);
+            $this->createConfigurationVariables($configurationID);
+            $this->createInternalVariables($internalID);
+            $this->synchronizeConfiguration($configurationID);
+            $this->writeCompactRuntimeToLegacyVariables($internalID, $this->readCompactRuntimeState());
+            $this->verifyLegacyVariableTreeForRollback($configurationID, $internalID);
+            $this->WriteAttributeBoolean('RollbackPrepared', true);
+            return 'Rollback auf V0.1.27 vorbereitet. Beide Relais sind AUS; Konfiguration, Referenz und Legacy-Laufzeitstruktur wurden wiederhergestellt. Jetzt V0.1.27 installieren, ohne vorher erneut zu fahren.';
+        } catch (Throwable $e) {
+            return 'Rollback konnte nicht sicher vorbereitet werden: ' . $e->getMessage();
+        } finally {
+            IPS_SemaphoreLeave($lockName);
+        }
     }
 
     public function AcknowledgeFault(): string
@@ -1279,11 +1570,11 @@ class LCNJalousie extends IPSModuleStrict
     private function getRuntimeDiagnostics(): array
     {
         $stateCategoryID = @IPS_GetObjectIDByIdent('04_Istwerte', $this->InstanceID);
-        $internalCategoryID = @IPS_GetObjectIDByIdent('05_Intern', $this->InstanceID);
         $relayUpID = $this->ReadPropertyInteger('RelayUpVariableID');
         $relayDownID = $this->ReadPropertyInteger('RelayDownVariableID');
+        $runtime = $this->readCompactRuntimeState();
 
-        $read = static function (int|false $parentID, string $ident, mixed $default): mixed {
+        $readState = static function (int|false $parentID, string $ident, mixed $default): mixed {
             if ($parentID === false) {
                 return $default;
             }
@@ -1295,32 +1586,39 @@ class LCNJalousie extends IPSModuleStrict
         };
 
         return [
+            'storageSchemaVersion' => $this->ReadAttributeInteger('CompactStorageSchemaVersion'),
+            'compactMigrationComplete' => $this->ReadAttributeBoolean('CompactMigrationComplete'),
+            'legacySnapshotValid' => $this->verifyLegacySnapshot(),
+            'legacySnapshotCreated' => $this->ReadAttributeInteger('LegacyV127SnapshotCreated'),
+            'rollbackPrepared' => $this->ReadAttributeBoolean('RollbackPrepared'),
+            'legacyConfigurationVariableCount' => $this->legacyVariableCount('01_Konfiguration'),
+            'legacyInternalVariableCount' => $this->legacyVariableCount('05_Intern'),
             'relayUpSelectedValue' => $relayUpID > 0 && IPS_VariableExists($relayUpID) ? GetValueBoolean($relayUpID) : null,
             'relayDownSelectedValue' => $relayDownID > 0 && IPS_VariableExists($relayDownID) ? GetValueBoolean($relayDownID) : null,
-            'driveState' => $read($stateCategoryID, 'Fahrstatus', 0),
-            'phase' => $read($stateCategoryID, 'Phase', 0),
-            'lastAction' => $read($stateCategoryID, 'Letzte_Aktion', ''),
-            'lastStatusTimestamp' => $read($stateCategoryID, 'Letzte_Statusmeldung', 0),
-            'lastRelaysOffTimestamp' => $read($stateCategoryID, 'Letzte_Relais_AUS_Bestaetigung', 0),
-            'orderNumber' => $read($internalCategoryID, 'Auftragsnummer', 0),
-            'orderType' => $read($internalCategoryID, 'Auftragstyp', 0),
-            'expectedDirection' => $read($internalCategoryID, 'Erwartete_Richtung', 0),
-            'stopRequested' => $read($internalCategoryID, 'Stop_Angefordert', false),
-            'pendingAction' => $read($internalCategoryID, 'Pending_Aktion', 0),
-            'startStatusRetryActive' => $read($internalCategoryID, 'Startstatus_Nachfrage_Aktiv', false),
-            'stopStatusRetryActive' => $read($internalCategoryID, 'Stopstatus_Nachfrage_Aktiv', false),
-            'startStatusRelayUpFresh' => $read($internalCategoryID, 'Startstatus_Relais_AUF_Empfangen', false),
-            'startStatusRelayDownFresh' => $read($internalCategoryID, 'Startstatus_Relais_AB_Empfangen', false),
-            'stopStatusRelayUpFresh' => $read($internalCategoryID, 'Stopstatus_Relais_AUF_Empfangen', false),
-            'stopStatusRelayDownFresh' => $read($internalCategoryID, 'Stopstatus_Relais_AB_Empfangen', false),
-            'verifiedStopRetrySent' => $read($internalCategoryID, 'Stop_Wiederholung_Gesendet', false),
-            'commandSentTimestampMs' => $read($internalCategoryID, 'Befehl_gesendet_ms', 0.0),
-            'externalReferenceSet' => $read($internalCategoryID, 'Externe_Referenz_Gesetzt', false),
-            'externalEndDeadlineMs' => $read($internalCategoryID, 'Externe_Endlage_bis_ms', 0.0),
-            'externalAutoStopDeadlineMs' => $read($internalCategoryID, 'Externer_Autostopp_bis_ms', 0.0),
-            'externalAutoStopActive' => $read($internalCategoryID, 'Externer_Autostopp_Aktiv', false),
-            'possibleForeignCommandSourceInstanceID' => $read($internalCategoryID, 'Fremdbefehl_Quelle', 0),
-            'possibleForeignCommandDetectedMs' => $read($internalCategoryID, 'Fremdbefehl_Erkannt_ms', 0.0),
+            'driveState' => $readState($stateCategoryID, 'Fahrstatus', 0),
+            'phase' => $readState($stateCategoryID, 'Phase', 0),
+            'lastAction' => $readState($stateCategoryID, 'Letzte_Aktion', ''),
+            'lastStatusTimestamp' => $readState($stateCategoryID, 'Letzte_Statusmeldung', 0),
+            'lastRelaysOffTimestamp' => $readState($stateCategoryID, 'Letzte_Relais_AUS_Bestaetigung', 0),
+            'orderNumber' => (int) $runtime['Auftragsnummer'],
+            'orderType' => (int) $runtime['Auftragstyp'],
+            'expectedDirection' => (int) $runtime['Erwartete_Richtung'],
+            'stopRequested' => (bool) $runtime['Stop_Angefordert'],
+            'pendingAction' => (int) $runtime['Pending_Aktion'],
+            'startStatusRetryActive' => (bool) $runtime['Startstatus_Nachfrage_Aktiv'],
+            'stopStatusRetryActive' => (bool) $runtime['Stopstatus_Nachfrage_Aktiv'],
+            'startStatusRelayUpFresh' => (bool) $runtime['Startstatus_Relais_AUF_Empfangen'],
+            'startStatusRelayDownFresh' => (bool) $runtime['Startstatus_Relais_AB_Empfangen'],
+            'stopStatusRelayUpFresh' => (bool) $runtime['Stopstatus_Relais_AUF_Empfangen'],
+            'stopStatusRelayDownFresh' => (bool) $runtime['Stopstatus_Relais_AB_Empfangen'],
+            'verifiedStopRetrySent' => (bool) $runtime['Stop_Wiederholung_Gesendet'],
+            'commandSentTimestampMs' => (float) $runtime['Befehl_gesendet_ms'],
+            'externalReferenceSet' => (bool) $runtime['Externe_Referenz_Gesetzt'],
+            'externalEndDeadlineMs' => (float) $runtime['Externe_Endlage_bis_ms'],
+            'externalAutoStopDeadlineMs' => (float) $runtime['Externer_Autostopp_bis_ms'],
+            'externalAutoStopActive' => (bool) $runtime['Externer_Autostopp_Aktiv'],
+            'possibleForeignCommandSourceInstanceID' => (int) $runtime['Fremdbefehl_Quelle'],
+            'possibleForeignCommandDetectedMs' => (float) $runtime['Fremdbefehl_Erkannt_ms'],
             'commandLease' => json_decode($this->GetCommandLease(), true),
             'foreignRelayResponse' => json_decode($this->GetForeignRelayResponse(), true),
             'routingBlock' => json_decode($this->GetRoutingBlock(), true),
@@ -1349,6 +1647,7 @@ class LCNJalousie extends IPSModuleStrict
         $referenced = false;
         $shakeFree = false;
         $errorText = '';
+        $runtime = $this->readCompactRuntimeState();
 
         $stateCategoryID = @IPS_GetObjectIDByIdent('04_Istwerte', $this->InstanceID);
         if ($stateCategoryID !== false) {
@@ -1387,22 +1686,9 @@ class LCNJalousie extends IPSModuleStrict
             }
         }
 
-        $internalCategoryID = @IPS_GetObjectIDByIdent('05_Intern', $this->InstanceID);
-        if ($internalCategoryID !== false) {
-            $orderTypeID = @IPS_GetObjectIDByIdent('Auftragstyp', (int) $internalCategoryID);
-            $targetPositionID = @IPS_GetObjectIDByIdent('Ziel_Behang', (int) $internalCategoryID);
-            $targetRotationID = @IPS_GetObjectIDByIdent('Ziel_Lamelle', (int) $internalCategoryID);
-
-            if ($orderTypeID !== false && IPS_VariableExists((int) $orderTypeID)) {
-                $orderType = (int) GetValueInteger((int) $orderTypeID);
-            }
-            if ($targetPositionID !== false && IPS_VariableExists((int) $targetPositionID)) {
-                $targetPosition = (float) GetValueFloat((int) $targetPositionID);
-            }
-            if ($targetRotationID !== false && IPS_VariableExists((int) $targetRotationID)) {
-                $targetRotation = (float) GetValueFloat((int) $targetRotationID);
-            }
-        }
+        $orderType = (int) $runtime['Auftragstyp'];
+        $targetPosition = (float) $runtime['Ziel_Behang'];
+        $targetRotation = (float) $runtime['Ziel_Lamelle'];
 
         $position = max(0.0, min(100.0, $position));
         $rotation = max(0.0, min(100.0, $rotation));
@@ -1429,14 +1715,10 @@ class LCNJalousie extends IPSModuleStrict
         $shakeFreeToggleEnabled = $active && !in_array($phase, [7, 9], true);
         $calibrationRemainingSeconds = 0;
         if ($phase === 10) {
-            $internalCategoryID = @IPS_GetObjectIDByIdent('05_Intern', $this->InstanceID);
-            if ($internalCategoryID !== false) {
-                $deadlineID = @IPS_GetObjectIDByIdent('Zielzeit_ms', (int) $internalCategoryID);
-                if ($deadlineID !== false && IPS_VariableExists((int) $deadlineID)) {
-                    $deadline = GetValueFloat((int) $deadlineID);
-                    $nowMs = (float) hrtime(true) / 1_000_000.0;
-                    $calibrationRemainingSeconds = (int) max(0, ceil(($deadline - $nowMs) / 1000.0));
-                }
+            $deadline = (float) $runtime['Zielzeit_ms'];
+            if ($deadline > 0.0) {
+                $nowMs = (float) hrtime(true) / 1_000_000.0;
+                $calibrationRemainingSeconds = (int) max(0, ceil(($deadline - $nowMs) / 1000.0));
             }
         }
 
@@ -2512,21 +2794,434 @@ class LCNJalousie extends IPSModuleStrict
         IPS_SetVariableProfileIcon($name, $icon);
     }
 
+    private function compactConfigurationArray(): array
+    {
+        $result = [];
+        foreach (self::COMPACT_CONFIG_MAP as $ident => [$property, $type]) {
+            $result[$ident] = match ($type) {
+                0 => $this->ReadPropertyBoolean($property),
+                1 => $this->ReadPropertyInteger($property),
+                2 => $this->ReadPropertyFloat($property),
+                3 => $this->ReadPropertyString($property),
+                default => throw new RuntimeException('Unbekannter Konfigurationstyp für ' . $ident),
+            };
+        }
+        return $result;
+    }
+
+    private function normalizeCompactRuntimeState(array $state): array
+    {
+        $normalized = [];
+        foreach (self::COMPACT_RUNTIME_DEFAULTS as $ident => $default) {
+            $value = array_key_exists($ident, $state) ? $state[$ident] : $default;
+            $normalized[$ident] = match (true) {
+                is_bool($default) => (bool) $value,
+                is_int($default) => (int) $value,
+                is_float($default) => (float) $value,
+                default => $value,
+            };
+        }
+        return $normalized;
+    }
+
+    private function readCompactRuntimeState(): array
+    {
+        $raw = $this->GetBuffer('CompactRuntimeState');
+        if ($raw === '') {
+            return self::COMPACT_RUNTIME_DEFAULTS;
+        }
+        $decoded = json_decode($raw, true);
+        if (!is_array($decoded)) {
+            // Ein beschädigter flüchtiger Buffer darf niemals zu einem
+            // ungeprüften Motorbefehl führen. Der Controller initialisiert den
+            // neutralen Zustand anschließend aus der realen Relaislage neu.
+            return self::COMPACT_RUNTIME_DEFAULTS;
+        }
+        return $this->normalizeCompactRuntimeState($decoded);
+    }
+
+    private function writeCompactRuntimeState(array $state): void
+    {
+        $normalized = $this->normalizeCompactRuntimeState($state);
+        $json = json_encode(
+            $normalized,
+            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION
+        );
+        if ($json === false) {
+            throw new RuntimeException('Kompakter Runtime-Zustand kann nicht serialisiert werden.');
+        }
+        $this->SetBuffer('CompactRuntimeState', $json);
+    }
+
+    private function snapshotCategoryVariableValues(string $categoryIdent): array
+    {
+        $categoryID = @IPS_GetObjectIDByIdent($categoryIdent, $this->InstanceID);
+        if ($categoryID === false || !IPS_CategoryExists((int) $categoryID)) {
+            return [];
+        }
+        $result = [];
+        foreach (IPS_GetChildrenIDs((int) $categoryID) as $childID) {
+            if (!IPS_VariableExists((int) $childID)) {
+                continue;
+            }
+            $object = IPS_GetObject((int) $childID);
+            $ident = (string) ($object['ObjectIdent'] ?? '');
+            if ($ident === '') {
+                continue;
+            }
+            $result[$ident] = GetValue((int) $childID);
+        }
+        ksort($result);
+        return $result;
+    }
+
+    private function snapshotInstanceVisualizationValues(): array
+    {
+        $result = [];
+        foreach (['Position', 'Drehgrad', 'Referenziert'] as $ident) {
+            $id = @IPS_GetObjectIDByIdent($ident, $this->InstanceID);
+            $result[$ident] = ($id !== false && IPS_VariableExists((int) $id))
+                ? GetValue((int) $id)
+                : null;
+        }
+        return $result;
+    }
+
+    private function captureAndStoreLegacySnapshot(string $sourceVersion): void
+    {
+        $internal = $this->snapshotCategoryVariableValues('05_Intern');
+        if ($internal === []) {
+            $internal = $this->readCompactRuntimeState();
+        } else {
+            $internal = $this->normalizeCompactRuntimeState($internal);
+        }
+
+        $snapshot = [
+            'schema' => 1,
+            'sourceVersion' => $sourceVersion,
+            'created' => time(),
+            'instanceID' => $this->InstanceID,
+            'configurationProperties' => $this->compactConfigurationArray(),
+            'legacyConfigurationVariables' => $this->snapshotCategoryVariableValues('01_Konfiguration'),
+            'internal' => $internal,
+            'control' => $this->snapshotCategoryVariableValues('03_Bedienung'),
+            'state' => $this->snapshotCategoryVariableValues('04_Istwerte'),
+            'instanceVisualization' => $this->snapshotInstanceVisualizationValues(),
+            'persistentReference' => [
+                'valid' => $this->ReadAttributeBoolean('ReferenceValid'),
+                'position' => $this->ReadAttributeFloat('ReferencePosition'),
+                'slat' => $this->ReadAttributeFloat('ReferenceSlat'),
+                'timestamp' => $this->ReadAttributeInteger('ReferenceTimestamp'),
+                'reason' => $this->ReadAttributeString('ReferenceReason'),
+            ],
+            'fault' => [
+                'latched' => $this->ReadAttributeBoolean('FaultLatched'),
+                'message' => $this->ReadAttributeString('FaultMessage'),
+            ],
+        ];
+        $json = json_encode(
+            $snapshot,
+            JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION
+        );
+        if ($json === false || $json === '') {
+            throw new RuntimeException('Rollback-Snapshot konnte nicht serialisiert werden.');
+        }
+        $hash = hash('sha256', $json);
+        $this->WriteAttributeString('LegacyV127Snapshot', $json);
+        $this->WriteAttributeString('LegacyV127SnapshotHash', $hash);
+        $this->WriteAttributeInteger('LegacyV127SnapshotCreated', time());
+
+        if (!$this->verifyLegacySnapshot()) {
+            throw new RuntimeException('Rollback-Snapshot konnte nach dem Speichern nicht verifiziert werden.');
+        }
+    }
+
+    private function verifyLegacySnapshot(): bool
+    {
+        $json = $this->ReadAttributeString('LegacyV127Snapshot');
+        $expectedHash = $this->ReadAttributeString('LegacyV127SnapshotHash');
+        if ($json === '' || $expectedHash === '' || !hash_equals($expectedHash, hash('sha256', $json))) {
+            return false;
+        }
+        $decoded = json_decode($json, true);
+        if (!is_array($decoded)
+            || (int) ($decoded['schema'] ?? 0) !== 1
+            || !is_array($decoded['configurationProperties'] ?? null)
+            || !is_array($decoded['internal'] ?? null)
+            || !is_array($decoded['persistentReference'] ?? null)) {
+            return false;
+        }
+        foreach (array_keys(self::COMPACT_CONFIG_MAP) as $ident) {
+            if (!array_key_exists($ident, $decoded['configurationProperties'])) {
+                return false;
+            }
+        }
+        foreach (array_keys(self::COMPACT_RUNTIME_DEFAULTS) as $ident) {
+            if (!array_key_exists($ident, $decoded['internal'])) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private function prepareCompactStorageMigration(string $previousVersion): void
+    {
+        if ($this->ReadAttributeInteger('CompactStorageSchemaVersion') === self::STORAGE_SCHEMA_VERSION
+            && $this->ReadAttributeBoolean('CompactMigrationComplete')) {
+            return;
+        }
+
+        $legacyConfigCount = $this->legacyVariableCount('01_Konfiguration');
+        $legacyRuntimeCount = $this->legacyVariableCount('05_Intern');
+        $hasAnyLegacyState = $legacyConfigCount > 0 || $legacyRuntimeCount > 0;
+        if ($hasAnyLegacyState
+            && ($legacyConfigCount !== count(self::COMPACT_CONFIG_MAP)
+                || $legacyRuntimeCount !== count(self::COMPACT_RUNTIME_DEFAULTS))) {
+            throw new RuntimeException(
+                sprintf(
+                    'Legacy-Struktur ist unvollständig (%d/%d Konfiguration, %d/%d Intern). Migration wurde vor jeder Löschung abgebrochen.',
+                    $legacyConfigCount,
+                    count(self::COMPACT_CONFIG_MAP),
+                    $legacyRuntimeCount,
+                    count(self::COMPACT_RUNTIME_DEFAULTS)
+                )
+            );
+        }
+
+        if (!$this->verifyLegacySnapshot()) {
+            $this->captureAndStoreLegacySnapshot($previousVersion !== '' ? $previousVersion : 'Neuinstallation');
+        }
+
+        // Solange die V0.1.27-Internvariablen noch vorhanden sind, werden ihre
+        // aktuellen Werte exakt übernommen. Erst nach erfolgreichem Aufbau und
+        // vollständiger Validierung werden die alten Variablen entfernt.
+        $legacyInternal = $this->snapshotCategoryVariableValues('05_Intern');
+        if ($legacyInternal !== []) {
+            $runtime = $this->normalizeCompactRuntimeState($legacyInternal);
+            $this->writeCompactRuntimeState($runtime);
+        } elseif ($this->GetBuffer('CompactRuntimeState') === '') {
+            $this->writeCompactRuntimeState(self::COMPACT_RUNTIME_DEFAULTS);
+        }
+
+        // Roundtrip-Prüfung: kein Löschen der Legacy-Struktur, solange der neue
+        // Speicher nicht alle Zustandsfelder korrekt zurückliefert.
+        $roundtrip = $this->readCompactRuntimeState();
+        if (array_keys($roundtrip) !== array_keys(self::COMPACT_RUNTIME_DEFAULTS)) {
+            throw new RuntimeException('Kompakter Runtime-Speicher ist unvollständig; Migration abgebrochen.');
+        }
+        $configRoundtrip = json_decode($this->GetCompactConfiguration(), true);
+        if (!is_array($configRoundtrip) || array_keys($configRoundtrip) !== array_keys(self::COMPACT_CONFIG_MAP)) {
+            throw new RuntimeException('Kompakte Konfiguration ist unvollständig; Migration abgebrochen.');
+        }
+
+        $this->WriteAttributeInteger('CompactStorageSchemaVersion', self::STORAGE_SCHEMA_VERSION);
+        $this->WriteAttributeString('CompactMigrationSourceVersion', $previousVersion !== '' ? $previousVersion : 'Neuinstallation');
+        $this->WriteAttributeBoolean('RollbackPrepared', false);
+    }
+
+    private function legacyVariableIdentsForCategory(string $categoryIdent): array
+    {
+        return match ($categoryIdent) {
+            '01_Konfiguration' => array_keys(self::COMPACT_CONFIG_MAP),
+            '05_Intern' => array_keys(self::COMPACT_RUNTIME_DEFAULTS),
+            default => [],
+        };
+    }
+
+    private function deleteLegacyVariablesFromCategory(string $categoryIdent): void
+    {
+        $categoryID = @IPS_GetObjectIDByIdent($categoryIdent, $this->InstanceID);
+        if ($categoryID === false || !IPS_CategoryExists((int) $categoryID)) {
+            return;
+        }
+
+        // Ausschließlich die vom Modul selbst erzeugten V0.1.27-Idents
+        // entfernen. Eventuelle benutzerdefinierte Variablen in derselben
+        // Kategorie sind kein Teil der Migration und bleiben unangetastet.
+        foreach ($this->legacyVariableIdentsForCategory($categoryIdent) as $ident) {
+            $childID = @IPS_GetObjectIDByIdent($ident, (int) $categoryID);
+            if ($childID !== false && IPS_VariableExists((int) $childID)) {
+                IPS_DeleteVariable((int) $childID);
+            }
+        }
+    }
+
+    private function legacyVariableCount(string $categoryIdent): int
+    {
+        $categoryID = @IPS_GetObjectIDByIdent($categoryIdent, $this->InstanceID);
+        if ($categoryID === false || !IPS_CategoryExists((int) $categoryID)) {
+            return 0;
+        }
+        $count = 0;
+        foreach ($this->legacyVariableIdentsForCategory($categoryIdent) as $ident) {
+            $childID = @IPS_GetObjectIDByIdent($ident, (int) $categoryID);
+            if ($childID !== false && IPS_VariableExists((int) $childID)) {
+                $count++;
+            }
+        }
+        return $count;
+    }
+
+    private function writeCompactRuntimeToLegacyVariables(int $internalCategoryID, array $state): void
+    {
+        $state = $this->normalizeCompactRuntimeState($state);
+        foreach (self::COMPACT_RUNTIME_DEFAULTS as $ident => $default) {
+            $id = $this->find($internalCategoryID, $ident);
+            $value = $state[$ident];
+            match (true) {
+                is_bool($default) => SetValueBoolean($id, (bool) $value),
+                is_int($default) => SetValueInteger($id, (int) $value),
+                is_float($default) => SetValueFloat($id, (float) $value),
+                default => null,
+            };
+        }
+    }
+
+    private function verifyLegacyVariableTreeForRollback(int $configurationID, int $internalID): void
+    {
+        foreach (self::COMPACT_CONFIG_MAP as $ident => $_) {
+            $id = @IPS_GetObjectIDByIdent($ident, $configurationID);
+            if ($id === false || !IPS_VariableExists((int) $id)) {
+                throw new RuntimeException('Rollback-Konfigurationsvariable fehlt: ' . $ident);
+            }
+        }
+        foreach (self::COMPACT_RUNTIME_DEFAULTS as $ident => $_) {
+            $id = @IPS_GetObjectIDByIdent($ident, $internalID);
+            if ($id === false || !IPS_VariableExists((int) $id)) {
+                throw new RuntimeException('Rollback-Internvariable fehlt: ' . $ident);
+            }
+        }
+    }
+
+    private function restoreLegacyVariableTreeFromSnapshot(): void
+    {
+        if (!$this->verifyLegacySnapshot()) {
+            throw new RuntimeException('Rollback-Snapshot ist nicht verfügbar oder beschädigt.');
+        }
+        $snapshot = json_decode($this->ReadAttributeString('LegacyV127Snapshot'), true, 512, JSON_THROW_ON_ERROR);
+        $configurationID = $this->category('01_Konfiguration', '01 Konfiguration', 10);
+        $internalID = $this->category('05_Intern', '05 Intern', 50);
+        $this->createConfigurationVariables($configurationID);
+        $this->createInternalVariables($internalID);
+        // Properties sind die maßgebliche aktuelle Konfiguration. Dadurch
+        // bleibt auch eine nach der Migration vorgenommene Änderung rollbackfähig.
+        $this->synchronizeConfiguration($configurationID);
+        // Bei einem fehlgeschlagenen Löschvorgang muss die rekonstruierte
+        // V0.1.27-Struktur den *aktuellen* Kompaktzustand erhalten. Der
+        // ursprüngliche Snapshot dient als verifizierte Rückfallebene, darf
+        // aber einen inzwischen fortgeschriebenen Runtime-Zustand nicht
+        // zurückdrehen (z. B. wenn die Bereinigung bis Relais-AUS vertagt war).
+        $this->writeCompactRuntimeToLegacyVariables(
+            $internalID,
+            $this->readCompactRuntimeState()
+        );
+        $this->verifyLegacyVariableTreeForRollback($configurationID, $internalID);
+    }
+
+    private function canSafelyDeleteLegacyVariables(): bool
+    {
+        $relayUpID = $this->ReadPropertyInteger('RelayUpVariableID');
+        $relayDownID = $this->ReadPropertyInteger('RelayDownVariableID');
+        return $this->isBooleanVariable($relayUpID)
+            && $this->isBooleanVariable($relayDownID)
+            && !GetValueBoolean($relayUpID)
+            && !GetValueBoolean($relayDownID);
+    }
+
+    private function tryFinalizeCompactStorageMigrationSafely(bool $configurationKnownValid = false): void
+    {
+        if (!$configurationKnownValid
+            || $this->ReadAttributeInteger('CompactStorageSchemaVersion') !== self::STORAGE_SCHEMA_VERSION
+            || $this->ReadAttributeBoolean('CompactMigrationComplete')
+            || $this->ReadAttributeBoolean('RollbackPrepared')
+            || $this->GetBuffer('MaintenanceActive') === '1') {
+            return;
+        }
+
+        // Die nachträgliche Bereinigung (z. B. nach einer beim Update noch
+        // laufenden Fahrt) verwendet dieselbe Instanzsperre wie Controller und
+        // Worker. Dadurch kann kein Runtime-Flush gleichzeitig Variablen
+        // zurückschreiben, während die Legacy-Struktur entfernt wird.
+        $lockName = 'Jalousie_PHP_' . $this->InstanceID;
+        if (!IPS_SemaphoreEnter($lockName, 1000)) {
+            return;
+        }
+        try {
+            $this->finalizeCompactStorageMigration();
+        } catch (Throwable $e) {
+            // Die Steuerung selbst bleibt auf dem bereits funktionierenden
+            // Kompaktspeicher. Nur die Variablenbereinigung wird vertagt.
+            $this->SendDebug('CompactMigration', 'Legacy-Bereinigung vertagt: ' . $e->getMessage(), 0);
+            $this->LogMessage('Kompaktmigration: Legacy-Bereinigung wurde sicher zurückgerollt und wird später erneut versucht.', 10204);
+        } finally {
+            IPS_SemaphoreLeave($lockName);
+        }
+    }
+
+    private function finalizeCompactStorageMigration(): void
+    {
+        if ($this->ReadAttributeBoolean('RollbackPrepared') || $this->ReadAttributeBoolean('CompactMigrationComplete')) {
+            return;
+        }
+        if ($this->legacyVariableCount('01_Konfiguration') === 0
+            && $this->legacyVariableCount('05_Intern') === 0) {
+            $this->WriteAttributeBoolean('CompactMigrationComplete', true);
+            return;
+        }
+
+        // Während eines laufenden Motors wird niemals an der Legacy-Struktur
+        // gelöscht. Die neuen Skripte arbeiten bereits aus dem Kompaktspeicher;
+        // die Bereinigung erfolgt automatisch beim nächsten Healthcheck im
+        // sicheren Relais-AUS-Zustand.
+        if (!$this->canSafelyDeleteLegacyVariables()) {
+            return;
+        }
+        if (!$this->verifyLegacySnapshot()) {
+            throw new RuntimeException('Rollback-Snapshot ist vor der Bereinigung nicht verifizierbar.');
+        }
+        // Erneut sicherstellen, dass beide neuen Speicherquellen lesbar sind.
+        $this->readCompactRuntimeState();
+        $this->compactConfigurationArray();
+
+        try {
+            $this->deleteLegacyVariablesFromCategory('01_Konfiguration');
+            $this->deleteLegacyVariablesFromCategory('05_Intern');
+            if ($this->legacyVariableCount('01_Konfiguration') !== 0
+                || $this->legacyVariableCount('05_Intern') !== 0) {
+                throw new RuntimeException('Nicht alle Legacy-Variablen konnten entfernt werden.');
+            }
+            $configurationID = @IPS_GetObjectIDByIdent('01_Konfiguration', $this->InstanceID);
+            $internalID = @IPS_GetObjectIDByIdent('05_Intern', $this->InstanceID);
+            if ($configurationID !== false) {
+                IPS_SetName((int) $configurationID, '01 Konfiguration (kompakt)');
+            }
+            if ($internalID !== false) {
+                IPS_SetName((int) $internalID, '05 Intern (kompakt)');
+            }
+            $this->WriteAttributeBoolean('CompactMigrationComplete', true);
+        } catch (Throwable $e) {
+            // Die Bereinigung selbst ist nicht atomar. Falls Symcon beim
+            // Löschen eines Objekts abbricht, wird die vollständige V0.1.27-
+            // Struktur aus dem vorher verifizierten Snapshot rekonstruiert.
+            $this->restoreLegacyVariableTreeFromSnapshot();
+            $this->WriteAttributeBoolean('CompactMigrationComplete', false);
+            throw new RuntimeException('Kompaktmigration zurückgerollt: ' . $e->getMessage(), 0, $e);
+        }
+    }
+
     private function ensureObjectTree(): array
     {
-        $configuration = $this->category('01_Konfiguration', '01 Konfiguration', 10);
+        $configuration = $this->category('01_Konfiguration', '01 Konfiguration (kompakt)', 10);
         $lcn = $this->category('02_LCN_Status', '02 LCN-Status', 20);
         $control = $this->category('03_Bedienung', '03 Bedienung', 30);
         $state = $this->category('04_Istwerte', '04 Istwerte', 40);
-        $internal = $this->category('05_Intern', '05 Intern', 50);
+        $internal = $this->category('05_Intern', '05 Intern (kompakt)', 50);
         $scripts = $this->category('06_Skripte', '06 Skripte', 60);
         $visualization = $this->category('07_Visualisierung', '07 Visualisierung', 70);
         $acceptance = $this->category('08_Abnahme', '08 Abnahme', 80);
 
-        $this->createConfigurationVariables($configuration);
         $this->createControlVariables($control);
         $this->createStateVariables($state);
-        $this->createInternalVariables($internal);
         $this->variable($acceptance, 'Hinweis', 'Hinweis', 3, '', 10, 'Motorbetrieb erst nach LCN-PRO-, Busmonitor- und Endlagentest freigeben.', false);
 
         return compact('configuration', 'lcn', 'control', 'state', 'internal', 'scripts', 'visualization', 'acceptance');
@@ -2657,44 +3352,7 @@ class LCNJalousie extends IPSModuleStrict
 
     private function synchronizeConfiguration(int $categoryID): void
     {
-        $map = [
-            'Projektname' => ['ProjectName', 3],
-            'Modul_Aktiv' => ['ModuleEnabled', 0],
-            'LCN_Sendemodulinstanz_ID' => ['LCNSendModuleID', 1],
-            'LCN_Aktormodulinstanz_ID' => ['LCNActorModuleID', 1],
-            'Relais_AUF_ID' => ['RelayUpVariableID', 1],
-            'Relais_AB_ID' => ['RelayDownVariableID', 1],
-            'GT8_LANG_AUF_ID' => ['GT8LongUpVariableID', 1],
-            'GT8_LANG_AB_ID' => ['GT8LongDownVariableID', 1],
-            'TS_KURZ_AUF' => ['TSShortUp', 3],
-            'TS_KURZ_AB' => ['TSShortDown', 3],
-            'TS_Belegung_bestaetigt' => ['TSMappingConfirmed', 0],
-            'Gesamtlaufzeit_ms' => ['TotalTravelMs', 1],
-            'Wendezeit_ms' => ['TurnMs', 1],
-            'Sanftanlauf_ms' => ['SoftStartMs', 1],
-            'Sanftstopp_AUF_ms' => ['SoftStopUpMs', 1],
-            'Sanftstopp_ZU_ms' => ['SoftStopDownMs', 1],
-            'Behanglaufzeit_ms' => ['BlindTravelMs', 1],
-            'Referenzreserve_ms' => ['ReferenceReserveMs', 1],
-            'MaxFahrt_ms' => ['MaxTravelMs', 1],
-            'ShakeFree_ms' => ['ShakeFreeMs', 1],
-            'ShakeFree_Pause_ms' => ['ShakeFreePauseMs', 1],
-            'Kalibrierfenster_ms' => ['CalibrationWindowMs', 1],
-            'Relaisbestaetigung_ms' => ['RelayConfirmMs', 1],
-            'Stoppbestaetigung_ms' => ['StopConfirmMs', 1],
-            'Spaetstart_Schutz_ms' => ['LateStartGuardMs', 1],
-            'Workerfenster_ms' => ['WorkerWindowMs', 1],
-            'Positionstoleranz' => ['PositionTolerance', 2],
-            'Lamellentoleranz' => ['SlatTolerance', 2],
-            'Unreferenziert_erlauben' => ['AllowUnreferenced', 0],
-            'Diagnose_Log' => ['DiagnosticLog', 0],
-            'Statusabfrage_beim_Start' => ['RequestStatusOnStart', 0],
-            'Statussync_ms' => ['StatusSyncMs', 1],
-            'Relais_Koaleszenz_ms' => ['RelayCoalesceMs', 1],
-            'Befehlsabstand_ms' => ['CommandSpacingMs', 1],
-            'Healthcheck_s' => ['HealthcheckSeconds', 1],
-        ];
-        foreach ($map as $ident => [$property, $type]) {
+        foreach (self::COMPACT_CONFIG_MAP as $ident => [$property, $type]) {
             $id = $this->find($categoryID, $ident);
             match ($type) {
                 0 => SetValueBoolean($id, $this->ReadPropertyBoolean($property)),
@@ -2708,10 +3366,10 @@ class LCNJalousie extends IPSModuleStrict
     private function ensureRuntimeScripts(int $scriptsCategoryID): void
     {
         $scripts = [
-            'Controller' => ['10 Controller V11.9', 20, 'Controller.php'],
-            'Worker' => ['20 Worker V11.9', 30, 'Worker.php'],
-            'Healthcheck' => ['30 Healthcheck V11.9', 40, 'Healthcheck.php'],
-            'Diagnose' => ['90 Diagnose V11.9', 90, 'Diagnose.php'],
+            'Controller' => ['10 Controller V12.0', 20, 'Controller.php'],
+            'Worker' => ['20 Worker V12.0', 30, 'Worker.php'],
+            'Healthcheck' => ['30 Healthcheck V12.0', 40, 'Healthcheck.php'],
+            'Diagnose' => ['90 Diagnose V12.0', 90, 'Diagnose.php'],
         ];
         foreach ($scripts as $ident => [$name, $position, $file]) {
             $path = __DIR__ . '/scripts/' . $file;
@@ -2887,13 +3545,9 @@ class LCNJalousie extends IPSModuleStrict
         );
 
         if (!$enabled) {
-            $internalCategoryID = @IPS_GetObjectIDByIdent('05_Intern', $this->InstanceID);
-            if ($internalCategoryID !== false) {
-                $workerActiveID = @IPS_GetObjectIDByIdent('Worker_Aktiv', (int) $internalCategoryID);
-                if ($workerActiveID !== false && IPS_VariableExists((int) $workerActiveID)) {
-                    SetValueBoolean((int) $workerActiveID, false);
-                }
-            }
+            $runtime = $this->readCompactRuntimeState();
+            $runtime['Worker_Aktiv'] = false;
+            $this->writeCompactRuntimeState($runtime);
         }
     }
 

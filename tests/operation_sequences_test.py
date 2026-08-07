@@ -58,7 +58,7 @@ for required in [
 queue_body = function_body(CONTROLLER, 'J_QueueAfterStop', 'J_BeginCancelGuard')
 assert_order(
     queue_body,
-    "GetValueBoolean(J_ID($rootID, '05_Intern', 'Stop_Angefordert'))",
+    "J_IGetBoolean($rootID, 'Stop_Angefordert')",
     'J_BeginStopWatch',
     'quick follow-up duplicate STOP guard',
 )
@@ -101,14 +101,14 @@ for required in [
     'Stopstatus_Relais_AB_Empfangen',
     'if (!$freshUp || !$freshDown)',
     'Aus Sicherheitsgründen wurde kein zweites Toggle gesendet',
-    'if (GetValueBoolean($verifiedRetryID))',
-    'SetValueBoolean($verifiedRetryID, true)',
+    "if (J_IGetBoolean($rootID, 'Stop_Wiederholung_Gesendet'))",
+    "J_ISetBoolean($rootID, 'Stop_Wiederholung_Gesendet', true)",
     'J_SendDirection($rootID, $confirmedState, $confirmedState)',
 ]:
     if required not in stop_timeout:
         raise AssertionError(f'stop timeout safety missing: {required}')
-assert_order(stop_timeout, 'LCN_RequestStatus($actorModuleID)', 'SetValueBoolean($verifiedRetryID, true)', 'fresh status before STOP retry')
-assert_order(stop_timeout, 'SetValueBoolean($verifiedRetryID, true)', 'J_SendDirection($rootID, $confirmedState, $confirmedState)', 'retry flag before telegram')
+assert_order(stop_timeout, 'LCN_RequestStatus($actorModuleID)', "J_ISetBoolean($rootID, 'Stop_Wiederholung_Gesendet', true)", 'fresh status before STOP retry')
+assert_order(stop_timeout, "J_ISetBoolean($rootID, 'Stop_Wiederholung_Gesendet', true)", 'J_SendDirection($rootID, $confirmedState, $confirmedState)', 'retry flag before telegram')
 
 # 12: At a confirmed hard lower end, a queued opposite command wins before the
 # calibration window. Thus a quick reversal cannot be blocked by calibration.
@@ -247,7 +247,7 @@ for required in [
 if 'waitForOtherCommandLease(15000)' in send_command:
     raise AssertionError('a foreign unconfirmed start must not synchronously block the next blind command')
 assert_order(send_command, 'markCommandLeaseState($direction, $expectedRelayState)', 'LCN_SendCommand($sendModuleID', 'lease marker before telegram')
-assert_order(real_start, 'J_ClearCommandLease($rootID);', "SetValueFloat(J_ID($rootID, '05_Intern', 'Zielzeit_ms')", 'lease release after real start')
+assert_order(real_start, 'J_ClearCommandLease($rootID);', "J_ISetFloat($rootID, 'Zielzeit_ms'", 'lease release after real start')
 if 'J_ClearCommandLease($rootID);' not in real_stop:
     raise AssertionError('real relay-off confirmation must clear command lease')
 

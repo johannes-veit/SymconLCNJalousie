@@ -20,7 +20,7 @@ Diese Anleitung führt Sie ohne Git-Vorkenntnisse vom vorbereiteten Ordner bis z
 
 ## B. Ersten Stand speichern und öffentlich veröffentlichen
 
-1. Unten links bei **Summary** tragen Sie ein: `Update Symcon LCN Jalousie 0.1.24`.
+1. Unten links bei **Summary** tragen Sie ein: `Update Symcon LCN Jalousie 0.1.28`.
 2. Klicken Sie auf **Commit to main**.
 3. Klicken Sie oben auf **Publish repository**.
 4. Kontrollieren Sie den Namen `SymconLCNJalousie`.
@@ -104,7 +104,7 @@ Arbeiten Sie die Bereiche von oben nach unten ab:
 Dieser Fehler betraf Version 0.1.2. In Version 0.1.3 wird die Initialkonfiguration des Konfigurators korrekt als JSON-Objekt `{}` ausgegeben. Nach dem Update in der Symcon-Modulverwaltung kann die Zeile „Neue LCN-Jalousie“ über „Alle erstellen“ angelegt werden.
 ## Kachel und erste Referenz
 
-Nach der Installation beziehungsweise dem Update auf 0.1.24 die Jalousieinstanz einmal mit **Übernehmen** neu anwenden und die Kachel-Visualisierung mit `Strg + F5` neu laden. Die Instanz zeigt anschließend die korrigierte HTML-SDK-Kachel: Behang und Lamellen mit fluchtenden Dreispalten-Layouts aus runden Tasten, mittiger Grafik und rechtem Slider, ShakeFree nach Endlage ZU sowie dem kompakten Laufstatus. Der Instanzname wird von Symcon selbst dargestellt und innerhalb der Kachel nicht wiederholt.
+Nach der Installation beziehungsweise einem größeren Update die Kachel-Visualisierung bei Bedarf mit `Strg + F5` neu laden. Ein zusätzliches erneutes Speichern jeder Jalousieinstanz ist bei einer erfolgreichen V0.1.28-Migration nicht erforderlich. Die Instanz zeigt anschließend die korrigierte HTML-SDK-Kachel: Behang und Lamellen mit fluchtenden Dreispalten-Layouts aus runden Tasten, mittiger Grafik und rechtem Slider, ShakeFree nach Endlage ZU sowie dem kompakten Laufstatus. Der Instanzname wird von Symcon selbst dargestellt und innerhalb der Kachel nicht wiederholt.
 
 Solange `Position gültig` ausgeschaltet ist, sind 0 %/0 % nur Initialwerte und keine bestätigte reale Stellung. Führen Sie als ersten Abgleich im Modul eine **Referenzfahrt AUF** oder **Referenzfahrt AB** aus. Nach dem kontrollierten Fahrtende setzt das Modul 0 %/0 % beziehungsweise 100 %/100 % und schaltet `Position gültig` ein. Ist die Position noch unbekannt, behandelt das Modul den ersten Symcon-Endlagenauftrag auf 0 % oder 100 % automatisch als volle Referenzfahrt mit der passenden richtungsabhängigen Gesamtzeit plus Referenzreserve. Die explizite Referenzfahrt ist für den Erstabgleich trotzdem am klarsten und bewusst auswählbar.
 
@@ -172,3 +172,20 @@ Bei einem normalen Modulupdate bleiben eine gültige Referenz und die aktuelle P
 
 Ist die Referenz bereits vor dem Update ungültig, kann sie nicht allein aus dem zuletzt angezeigten Prozentwert sicher wiederhergestellt werden. In diesem Fall ist weiterhin eine vollständige Endlagenfahrt nötig.
 
+
+
+## Kompaktmigration und Rückweg ab Version 0.1.28
+
+Beim direkten Update von V0.1.27 auf V0.1.28 läuft die Migration pro Jalousie automatisch. Die bestehende LCN-Zuordnung, Laufzeiten, Soft-Stop-Werte, GT8-Zuordnung, aktuelle Position und eine gültige Referenz werden übernommen. Es ist keine erneute LCN-Konfiguration und normalerweise keine neue Referenzfahrt erforderlich.
+
+Die Instanz erzeugt vor dem Entfernen alter Hilfsvariablen einen persistenten, verifizierten Rollback-Snapshot. Anschließend werden 35 Konfigurations-Spiegelvariablen und 43 interne Variablen entfernt. Sind AUF oder ZU während des Updates aktiv, wird die Bereinigung automatisch vertagt, bis beide Relais AUS sind. Die Steuerung arbeitet währenddessen bereits mit dem neuen Kompaktspeicher.
+
+Nach dem Update in der Diagnose kontrollieren:
+
+1. `storageSchemaVersion = 2`
+2. `compactMigrationComplete = true`
+3. `legacySnapshotValid = true`
+4. `legacyConfigurationVariableCount = 0`
+5. `legacyInternalVariableCount = 0`
+
+Falls ein Rückweg erforderlich ist, zuerst sicherstellen, dass beide Motorrelais AUS sind. Dann im Aktionsbereich **Rollback auf V0.1.27 vorbereiten** drücken. Erst nach der Erfolgsmeldung V0.1.27 wieder installieren. Dadurch werden die von V0.1.27 erwarteten Legacy-Variablen mit den aktuellen Werten vorab rekonstruiert.

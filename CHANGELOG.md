@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.28 – 2026-08-07
+
+- Kompakte Speicherarchitektur eingeführt, ohne die Fahr-, Relais-, GT8-, Soft-Stop-, Referenz-, Mehrinstanz- oder Visualisierungslogik der V0.1.27 funktional zu verändern.
+- 35 reine Konfigurations-Spiegelvariablen werden direkt durch Modul-Properties ersetzt; 43 interne Zustandsvariablen liegen in einem kompakten Modulbuffer. Dadurch entfallen nach erfolgreicher Migration exakt 78 Symcon-Variablen pro Jalousieinstanz.
+- Einstufige, transaktional abgesicherte Migration: Vor jeder Bereinigung wird pro Instanz ein persistenter V0.1.27-Rollback-Snapshot erstellt, per SHA-256 verifiziert und der neue Runtime-Speicher per Roundtrip geprüft.
+- Neue V0.1.28-Persistenzattribute werden über die offizielle Modul-Migrationsphase (`Migrate`) ergänzt, sodass ein Repository-Update keinen Dienstneustart benötigt und bestehende Attribute/Properties unverändert übernommen werden.
+- Legacy-Variablen werden erst nach vollständig erfolgreichem Objektbaumaufbau, Skriptneuaufbau, Konfigurationsprüfung, Initialisierung und Visualisierung entfernt und niemals während eines aktiven Motorrelais gelöscht. Gelöscht werden ausschließlich die 78 bekannten Modul-Idents; benutzerdefinierte Variablen in denselben Kategorien bleiben erhalten.
+- Teilweiser Löschfehler wird abgefangen: Die vollständige V0.1.27-Legacy-Struktur wird automatisch rekonstruiert; ein inzwischen fortgeschriebener aktueller Runtime-Zustand wird dabei nicht auf den alten Snapshot zurückgesetzt.
+- ApplyChanges erhält vor der Migration eine exklusive Instanzsperre. Bereits laufende Controller-/Worker-Aufrufe müssen beendet sein, bevor Legacy-Objekte verändert werden; bei einem 30-s-Sperrfehler wird die Migration sicher ohne Löschung abgebrochen.
+- Rollback-Schaltfläche ergänzt: Bei beiden realen Relais AUS wird die von V0.1.27 erwartete Konfigurations-/Internstruktur aus aktueller Konfiguration und aktuellem Runtime-Zustand wiederhergestellt. Danach kann V0.1.27 ohne Neueinrichtung installiert werden.
+- Gültige Referenz, aktuelle Position, Lamellenposition, Fehlerspeicher, LCN-Zuordnungen und alle Properties bleiben beim Update erhalten. Eine normale erfolgreiche Migration erfordert keine neue Referenzfahrt.
+- Diagnose erweitert um Speicherschema, Migrationsstatus, Snapshot-Prüfung, Rollbackstatus und verbliebene Legacy-Variablen.
+- Runtime-Skriptkennung auf V12.0 erhöht.
+
 ## 0.1.27 – 2026-08-06
 
 - Schnelle Mehrinstanzstarts entkoppelt: Eine noch offene Relaisbestätigung einer anderen Jalousie blockiert das nächste Telegramm nicht mehr synchron.

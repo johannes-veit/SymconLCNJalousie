@@ -57,7 +57,15 @@ Eine ausführliche Anleitung steht in [ERSTE_SCHRITTE.md](ERSTE_SCHRITTE.md).
 
 ## Entwicklungsstand
 
-**0.1.25 – öffentliche Beta.** Der Runtime-Kern basiert auf der tiefengeprüften V11.3-Skriptfassung. Das Modul automatisiert deren Aufbau und Konfiguration. Vor einem produktiven Motorbetrieb bleiben reale Tests mit Symcon 9.0, PCHK/PCK, LCN-Bus, Relais, Motor und Endlagen zwingend.
+**0.1.28 – kompakte, rollbackfähige Beta.** Die Fahr- und Sicherheitslogik basiert unverändert auf dem V0.1.27-Funktionsstand; V0.1.28 reduziert ausschließlich redundante Symcon-Variablen und ergänzt eine abgesicherte Migration. Vor einem produktiven Motorbetrieb bleiben reale Tests mit Symcon 9.0, PCHK/PCK, LCN-Bus, Relais, Motor und Endlagen zwingend.
+
+## Kompakte Speicherarchitektur und Rollback ab Version 0.1.28
+
+V0.1.28 entfernt nach einer erfolgreichen Einmalmigration pro Jalousie **35 Konfigurations-Spiegelvariablen und 43 interne Laufzeitvariablen**. Die Konfiguration wird direkt aus den bereits vorhandenen Modul-Properties gelesen; der flüchtige Zustandsautomat liegt in einem kompakten Modulbuffer. Die sichtbaren Bedien-, Positions-, Referenz-, Status- und Fehlerwerte bleiben unverändert vorhanden. Damit entfallen **78 Symcon-Variablen pro Instanz**; bei zwölf Instanzen sind das 936 Variablen.
+
+Vor dem Löschen wird pro Instanz automatisch ein persistenter, SHA-256-verifizierter V0.1.27-Snapshot angelegt. Der neue Speicher wird vollständig zurückgelesen und geprüft. Legacy-Variablen werden erst nach erfolgreichem Neuaufbau und nur bei beiden Motorrelais AUS gelöscht. Scheitert eine Bereinigung teilweise, wird die vollständige Legacy-Struktur automatisch rekonstruiert. Eine gültige Referenz und die aktuelle Position bleiben erhalten.
+
+Für einen Rückweg zuerst in der V0.1.28-Instanz bei beiden Relais AUS **Rollback auf V0.1.27 vorbereiten** ausführen. Das Modul stellt die von V0.1.27 erwarteten 78 Variablen mit der aktuellen Konfiguration und dem aktuellen Laufzeitzustand wieder her. Danach kann die Bibliothek auf V0.1.27 zurückgesetzt werden. Ein vollständiges Symcon-Backup vor der Migration bleibt die zusätzliche Rückfallebene.
 
 ## Relaisbestätigung und parallele Bedienung ab Version 0.1.25
 

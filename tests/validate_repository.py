@@ -66,6 +66,7 @@ def check_php() -> None:
         ('relay_command_state_test.php', 'RELAY COMMAND STATE TEST OK'),
         ('lcn_address_validation_test.php', 'LCN ADDRESS VALIDATION TEST OK'),
         ('start_confirmation_migration_test.php', 'START CONFIRMATION MIGRATION TEST OK'),
+        ('compact_storage_migration_test.php', 'COMPACT STORAGE MIGRATION TEST OK'),
     ]
     for filename, success_text in php_regressions:
         test_path = ROOT / 'tests' / filename
@@ -944,7 +945,7 @@ def check_relay_binding_and_toggle_safety() -> None:
     queue_end = controller.find('function J_BeginCancelGuard', queue_start)
     if queue_start >= 0 and queue_end > queue_start:
         queue_body = controller[queue_start:queue_end]
-        stop_guard = queue_body.find("GetValueBoolean(J_ID($rootID, '05_Intern', 'Stop_Angefordert'))")
+        stop_guard = queue_body.find("J_IGetBoolean($rootID, 'Stop_Angefordert')")
         stop_send = queue_body.find('J_BeginStopWatch')
         if stop_guard < 0 or stop_send < 0 or stop_guard > stop_send:
             ERRORS.append(f'{controller_path.relative_to(ROOT)}: pending command must be stored before any possibility of a second toggle-STOP')
