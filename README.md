@@ -57,7 +57,7 @@ Eine ausführliche Anleitung steht in [ERSTE_SCHRITTE.md](ERSTE_SCHRITTE.md).
 
 ## Entwicklungsstand
 
-**0.1.28 – kompakte, rollbackfähige Beta.** Die Fahr- und Sicherheitslogik basiert unverändert auf dem V0.1.27-Funktionsstand; V0.1.28 reduziert ausschließlich redundante Symcon-Variablen und ergänzt eine abgesicherte Migration. Vor einem produktiven Motorbetrieb bleiben reale Tests mit Symcon 9.0, PCHK/PCK, LCN-Bus, Relais, Motor und Endlagen zwingend.
+**0.1.29 – kompakte, rollbackfähige Beta mit stabilisierter HTML-SDK-Bedienung.** Die Fahr- und Sicherheitslogik basiert unverändert auf dem V0.1.27-Funktionsstand; V0.1.28 reduziert ausschließlich redundante Symcon-Variablen und ergänzt eine abgesicherte Migration. Vor einem produktiven Motorbetrieb bleiben reale Tests mit Symcon 9.0, PCHK/PCK, LCN-Bus, Relais, Motor und Endlagen zwingend.
 
 ## Kompakte Speicherarchitektur und Rollback ab Version 0.1.28
 

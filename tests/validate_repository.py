@@ -1074,7 +1074,8 @@ def check_visualization_transport_resilience() -> None:
     required = [
         'let jalActionInFlight = false;',
         'const JAL_ACTION_TIMEOUT_MS = 8000;',
-        'const JAL_ACTION_GUARD_MS = 350;',
+        'const JAL_ACTION_GUARD_MS = 220;',
+        'const JAL_QUEUE_DELAY_MS = 75;',
         'function isTransientApiError(error)',
         "text.includes('failed to fetch')",
         "text.includes('uri=/api/')",
@@ -1084,8 +1085,12 @@ def check_visualization_transport_resilience() -> None:
         "typeof result.then === 'function'",
         'Der Befehl wird nicht automatisch wiederholt.',
         "navigator.onLine === false",
-        "jalActionInFlight && ident !== 'Stop'",
+        'jalActionInFlight || jalQueuedCommand || jalQueueTimer',
+        'queueLatestJalousieAction',
+        'scheduleQueuedCommand',
+        'sendImmediateStop',
         'failVisualizationTransport',
+        '/*__LCNJAL_INITIAL_STATE__*/',
     ]
     for pattern in required:
         if pattern not in html:

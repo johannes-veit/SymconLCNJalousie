@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.29 – 2026-08-07
+
+- HTML-SDK-Kachel startet direkt mit dem serverseitig gespeicherten Istzustand; der kurze Default-Flash `0 % / inaktiv` nach Bedienaktionen entfällt.
+- Bedienfelder werden waehrend einer laufenden `/api/`-Uebertragung nicht mehr optisch deaktiviert.
+- Schnelle Folgebefehle derselben Jalousie werden nicht mehr verworfen: Solange ein Aufruf laeuft, wird der jeweils letzte Sollbefehl lokal gepuffert und nach der naechsten eindeutigen Servermeldung gesendet.
+- Identische Doppelklicks bleiben kurz entprellt; unterschiedliche schnelle Zielwechsel werden akzeptiert.
+- STOP bleibt als Sicherheitsbefehl sofort absetzbar und verwirft lokal wartende Folgeziele.
+- Bei unklarem API-Transportfehler wird der wartende Folgebefehl bewusst verworfen und niemals automatisch wiederholt.
+- Fahr-, Relais-, GT8-, Referenz-, Soft-Stop-, Kompaktspeicher- und Rollbacklogik aus V0.1.28 unveraendert.
+
 ## 0.1.28 – 2026-08-07
 
 - Kompakte Speicherarchitektur eingeführt, ohne die Fahr-, Relais-, GT8-, Soft-Stop-, Referenz-, Mehrinstanz- oder Visualisierungslogik der V0.1.27 funktional zu verändern.

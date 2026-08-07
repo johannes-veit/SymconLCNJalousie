@@ -684,6 +684,9 @@
 <script>
     'use strict';
 
+    let jalInitialState = {};
+    /*__LCNJAL_INITIAL_STATE__*/
+
     let jalState = {
         position: 0,
         rotation: 0,
@@ -706,17 +709,23 @@
         faultResetAllowed: false,
         statusText: 'GESTOPPT',
         statusKey: 'stopped',
-        errorText: ''
+        errorText: '',
+        ...jalInitialState
     };
 
     let jalPendingCommand = null;
+    let jalQueuedCommand = null;
     let jalActionInFlight = false;
     let jalActionTimeout = 0;
+    let jalQueueTimer = 0;
     let jalLastActionTimestamp = 0;
+    let jalLastActionKey = '';
     let jalActionGeneration = 0;
+    let jalStopFeedbackUntil = 0;
 
     const JAL_ACTION_TIMEOUT_MS = 8000;
-    const JAL_ACTION_GUARD_MS = 350;
+    const JAL_ACTION_GUARD_MS = 220;
+    const JAL_QUEUE_DELAY_MS = 75;
 
     const byId = (id) => document.getElementById(id);
     const clamp = (value) => Math.max(0, Math.min(100, Number(value) || 0));
@@ -738,17 +747,16 @@
             if (jalActionInFlight && (
                 !jalPendingCommand
                 || Boolean(jalState.commandActive)
-                || pendingAge > 650
+                || pendingAge > 300
             )) {
-                clearActionInFlight(false);
+                clearActionInFlight(false, true);
             }
 
-            // Sobald der Server den Auftrag übernommen hat, ist der lokale
-            // Sofortindikator nicht mehr erforderlich. Nach Auftragsende
-            // (commandActive=false) wird der Kranz ebenfalls sicher entfernt.
-            if (Boolean(jalState.commandActive)) {
-                jalPendingCommand = null;
-            } else if (jalPendingCommand && Date.now() - jalPendingCommand.time > 650) {
+            // Der aktuell an Symcon übertragene Befehl und ein bereits vom
+            // Benutzer gewählter Folgebefehl bleiben getrennt. So kann die
+            // Kachel sofort auf weitere Eingaben reagieren, ohne dieselbe
+            // API-Anfrage parallel zu vervielfachen.
+            if (!jalActionInFlight && !jalQueuedCommand) {
                 jalPendingCommand = null;
             }
 
@@ -774,12 +782,31 @@
             || text.includes('load failed');
     }
 
-    function clearActionInFlight(render = true) {
+    function scheduleQueuedCommand() {
+        if (jalActionInFlight || !jalQueuedCommand || jalQueueTimer) {
+            return;
+        }
+        jalQueueTimer = window.setTimeout(() => {
+            jalQueueTimer = 0;
+            if (jalActionInFlight || !jalQueuedCommand) {
+                return;
+            }
+            const queued = jalQueuedCommand;
+            jalQueuedCommand = null;
+            dispatchJalousieAction(queued.ident, queued.value);
+        }, JAL_QUEUE_DELAY_MS);
+    }
+
+    function clearActionInFlight(render = true, dispatchQueued = true) {
         jalActionGeneration += 1;
         jalActionInFlight = false;
+        jalPendingCommand = null;
         if (jalActionTimeout) {
             window.clearTimeout(jalActionTimeout);
             jalActionTimeout = 0;
+        }
+        if (dispatchQueued) {
+            scheduleQueuedCommand();
         }
         if (render) {
             renderJalousie();
@@ -787,8 +814,12 @@
     }
 
     function failVisualizationTransport(error) {
-        clearActionInFlight(false);
-        jalPendingCommand = null;
+        clearActionInFlight(false, false);
+        jalQueuedCommand = null;
+        if (jalQueueTimer) {
+            window.clearTimeout(jalQueueTimer);
+            jalQueueTimer = 0;
+        }
         renderJalousie();
         showLocalWarning(
             `Verbindung zu Symcon unterbrochen: ${clientErrorText(error)}. `
@@ -808,33 +839,38 @@
         }, JAL_ACTION_TIMEOUT_MS);
     }
 
-    function sendJalousieAction(ident, value) {
-        if (!jalState.active && ident !== 'ResetError') {
-            showLocalWarning('Die Modulkonfiguration ist nicht freigegeben.');
-            return;
-        }
+    function normalizedActionValue(value) {
+        return Number.isFinite(Number(value)) ? Number(value) : value;
+    }
 
-        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-            showLocalWarning('Keine Netzwerkverbindung. Es wurde kein Befehl an Symcon gesendet.');
-            return;
-        }
+    function actionKey(ident, value) {
+        return `${ident}:${JSON.stringify(normalizedActionValue(value))}`;
+    }
 
+    function queueLatestJalousieAction(ident, value) {
+        jalQueuedCommand = {
+            ident,
+            value: normalizedActionValue(value),
+            time: Date.now()
+        };
+        renderJalousie();
+    }
+
+    function dispatchJalousieAction(ident, value) {
         const now = Date.now();
-        if (jalActionInFlight && ident !== 'Stop') {
-            showLocalWarning('Ein Bedienbefehl wird bereits an Symcon übertragen. Bitte den Relaiszustand abwarten.');
-            return;
-        }
-        if (ident !== 'Stop' && now - jalLastActionTimestamp < JAL_ACTION_GUARD_MS) {
+        const key = actionKey(ident, value);
+        if (key === jalLastActionKey && now - jalLastActionTimestamp < JAL_ACTION_GUARD_MS) {
             return;
         }
 
         jalLastActionTimestamp = now;
+        jalLastActionKey = key;
         jalActionInFlight = true;
         jalActionGeneration += 1;
         const generation = jalActionGeneration;
         jalPendingCommand = {
             ident,
-            value: Number.isFinite(Number(value)) ? Number(value) : value,
+            value: normalizedActionValue(value),
             time: now
         };
         renderJalousie();
@@ -851,6 +887,52 @@
         } catch (error) {
             failVisualizationTransport(error);
         }
+    }
+
+    function sendImmediateStop() {
+        jalQueuedCommand = null;
+        if (jalQueueTimer) {
+            window.clearTimeout(jalQueueTimer);
+            jalQueueTimer = 0;
+        }
+        jalStopFeedbackUntil = Date.now() + 700;
+        renderJalousie();
+        try {
+            const result = requestAction('Stop', true);
+            if (result && typeof result.then === 'function') {
+                result.catch((error) => failVisualizationTransport(error));
+            }
+        } catch (error) {
+            failVisualizationTransport(error);
+        }
+    }
+
+    function sendJalousieAction(ident, value) {
+        if (!jalState.active && ident !== 'ResetError') {
+            showLocalWarning('Die Modulkonfiguration ist nicht freigegeben.');
+            return;
+        }
+
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+            showLocalWarning('Keine Netzwerkverbindung. Es wurde kein Befehl an Symcon gesendet.');
+            return;
+        }
+
+        if (ident === 'Stop') {
+            sendImmediateStop();
+            return;
+        }
+
+        if (jalActionInFlight || jalQueuedCommand || jalQueueTimer) {
+            // Schnelle Folgebefehle werden nicht verworfen. Es wird nur der
+            // zuletzt gewählte Sollwert vorgemerkt und nach der nächsten
+            // eindeutigen Servermeldung gesendet. Dadurch entstehen keine
+            // parallelen /api/-Aufrufe und keine Befehlsstürme.
+            queueLatestJalousieAction(ident, value);
+            return;
+        }
+
+        dispatchJalousieAction(ident, value);
     }
 
     function showLocalWarning(message) {
@@ -877,14 +959,18 @@
     function renderCommandFeedback() {
         clearCommandFeedback();
 
-        if (jalPendingCommand) {
-            if (jalPendingCommand.ident === 'Position') {
-                setMatchingButtonCurrent('.jal-position-command', jalPendingCommand.value);
-            } else if (jalPendingCommand.ident === 'Drehgrad') {
-                setMatchingButtonCurrent('.jal-slat-command', jalPendingCommand.value);
-            } else if (jalPendingCommand.ident === 'Stop') {
-                byId('jal-stop').classList.add('is-current');
+        const feedbackCommand = jalQueuedCommand || jalPendingCommand;
+        if (feedbackCommand) {
+            if (feedbackCommand.ident === 'Position') {
+                setMatchingButtonCurrent('.jal-position-command', feedbackCommand.value);
+            } else if (feedbackCommand.ident === 'Drehgrad') {
+                setMatchingButtonCurrent('.jal-slat-command', feedbackCommand.value);
             }
+            return;
+        }
+
+        if (Date.now() < jalStopFeedbackUntil) {
+            byId('jal-stop').classList.add('is-current');
             return;
         }
 
@@ -915,9 +1001,9 @@
         const position = clamp(jalState.position);
         const rotation = clamp(jalState.rotation);
         const active = Boolean(jalState.active);
-        const controlsEnabled = Boolean(jalState.controlsEnabled) && !jalActionInFlight;
+        const controlsEnabled = Boolean(jalState.controlsEnabled);
         const referenced = Boolean(jalState.referenced);
-        const intermediateAllowed = Boolean(jalState.intermediateAllowed) && !jalActionInFlight;
+        const intermediateAllowed = Boolean(jalState.intermediateAllowed);
 
         const positionSlider = byId('jal-position');
         positionSlider.value = String(Math.round(position));
@@ -941,7 +1027,7 @@
 
         const shakeSwitch = byId('jal-shakefree');
         shakeSwitch.checked = Boolean(jalState.shakeFree);
-        shakeSwitch.disabled = !Boolean(jalState.shakeFreeToggleEnabled) || jalActionInFlight;
+        shakeSwitch.disabled = !Boolean(jalState.shakeFreeToggleEnabled);
         byId('jal-shakefree-text').textContent = shakeSwitch.checked ? 'Ein' : 'Aus';
 
         const statusKey = jalState.statusKey || 'stopped';
